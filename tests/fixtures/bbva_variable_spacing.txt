@@ -1,0 +1,4 @@
+Día         Concepto / Referencia                                             Cargo      Abono       Saldo
+03-07-2026  TRASP ENTRE CUENTAS PROPIAS                                               1,000.00  468,266.04
+04-07-2026  FILA INVALIDA SIN IMPORTES RECONOCIBLES
+05-07-2026  TRANSFERENCIA ERRONEA DEVOLUCION                                 500.00             467,766.04

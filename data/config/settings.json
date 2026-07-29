@@ -1,0 +1,11 @@
+{
+  "app_name": "Analizador Bancario",
+  "company_name": "Comercializadora Sarón Shekina SA de CV",
+  "export_folder": "C:\\Users\\Dev Shekina\\Desktop\\ROSADEV\\banks\\data\\exports",
+  "backup_folder": "C:\\Users\\Dev Shekina\\Desktop\\ROSADEV\\banks\\data\\backups",
+  "date_format": "%d/%m/%Y",
+  "rows_per_page": 100,
+  "backup_frequency_days": 1,
+  "currency": "MXN",
+  "theme": "dark"
+}

@@ -1,0 +1,4 @@
+Fecha,Descripción,Folio,Referencia,Cargo (MXN),Abono (MXN),Saldo total
+01/07/2026,Movimiento valido,SMG1,-,$10.00,,"$100.00"
+FECHA-INVALIDA,Movimiento con fecha invalida,SMG2,-,$5.00,,"$95.00"
+02/07/2026,Otro movimiento valido,SMG3,-,,"$20.00","$115.00"

@@ -1,0 +1,6 @@
+Día         Concepto / Referencia                                             Cargo      Abono       Saldo
+01-07-2026  IVA TASA DE DESC DEBITO/179064102 TERMINALES PUNTO                14.22             467,336.94
+01-07-2026  APLI TASA DE DES DEBITO/179064102 TERMINALES PUNTO                88.88             467,351.16
+01-07-2026  VENTAS DEBITO/149064102 TERMINALES PUNTO DE VENTA                         3,953.00  467,440.04
+02-07-2026  COMISION MANEJO DE CUENTA                                        150.00             467,290.04
+02-07-2026  IVA COMISION MANEJO DE CUENTA                                     24.00             467,266.04
