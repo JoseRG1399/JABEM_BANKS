@@ -16,7 +16,7 @@ from __future__ import annotations
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-ICON_PATH = PROJECT_ROOT / "resources" / "icon.ico"
+ICON_PATH = PROJECT_ROOT / "public" / "images" / "Logo.ico"
 
 
 def main() -> None:
@@ -30,6 +30,7 @@ def main() -> None:
         f"--distpath={PROJECT_ROOT / 'dist'}",
         f"--workpath={PROJECT_ROOT / 'build'}",
         f"--specpath={PROJECT_ROOT}",
+        f"--add-data={PROJECT_ROOT / 'public' / 'images'}{';'}public/images",
     ]
 
     if ICON_PATH.exists():

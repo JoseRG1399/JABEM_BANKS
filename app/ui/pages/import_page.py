@@ -250,6 +250,7 @@ class ImportPage(QWidget):
     def _on_import_finished(self, result) -> None:
         dialog = ImportResultDialog(result, parent=self)
         dialog.exec()
+        self._clear_form()
         self.import_completed.emit()
 
     def _on_import_failed(self, message: str) -> None:
@@ -258,6 +259,17 @@ class ImportPage(QWidget):
     def _on_worker_thread_finished(self) -> None:
         self._progress_bar.setVisible(False)
         self._worker = None
+        self._update_actions_enabled()
+
+    def _clear_form(self) -> None:
+        self._selected_file = None
+        self._bank_combo.setCurrentIndex(-1)
+        self._account_combo.clear()
+        self._drop_area.set_file_name("Arrastra un archivo TXT o CSV aquí, o usa el botón de abajo.")
+        self._file_type_label.clear()
+        self._preview.clear()
+        self._validation_label.clear()
+        self._validation_label.setObjectName("")
         self._update_actions_enabled()
 
 

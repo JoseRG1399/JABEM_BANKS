@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 APP_NAME_DEFAULT = "Analizador Bancario"
-APP_VERSION = "0.1.0"
+APP_VERSION = "2.0"
 COMPANY_FOLDER_NAME = "AnalizadorBancario"
 
 
@@ -84,6 +84,9 @@ class AppSettings:
     backup_frequency_days: int = 1
     currency: str = "MXN"
     theme: str = "light"
+    login_username: str = ""
+    login_password_hash: str = ""
+    login_password_salt: str = ""
 
     @classmethod
     def load(cls, settings_file: Path) -> "AppSettings":

@@ -4,6 +4,7 @@ from __future__ import annotations
 import datetime as dt
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QShowEvent
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
@@ -90,9 +91,9 @@ class DashboardPage(QWidget):
         outer.addWidget(quick_access, alignment=Qt.AlignmentFlag.AlignLeft)
 
         charts_row = QHBoxLayout()
-        self._payments_chart_layout = QVBoxLayout()
-        self._payments_chart_layout.addWidget(QLabel("Abonos por día"))
-        charts_row.addLayout(self._payments_chart_layout, 2)
+        self._cash_flow_chart_layout = QVBoxLayout()
+        self._cash_flow_chart_layout.addWidget(QLabel("Cargos vs abonos por día"))
+        charts_row.addLayout(self._cash_flow_chart_layout, 2)
 
         self._distribution_chart_layout = QVBoxLayout()
         self._distribution_chart_layout.addWidget(QLabel("Distribución por cuenta"))
@@ -103,6 +104,10 @@ class DashboardPage(QWidget):
         self._recent_imports_list = QListWidget()
         self._recent_imports_list.setMaximumHeight(140)
         outer.addWidget(self._recent_imports_list)
+
+    def showEvent(self, event: QShowEvent) -> None:  # noqa: N802
+        super().showEvent(event)
+        self.refresh()
 
     def _go_to_unclassified(self) -> None:
         window = self.window()
@@ -134,27 +139,32 @@ class DashboardPage(QWidget):
                 )
                 self._recent_imports_list.addItem(QListWidgetItem(text))
 
-            self._render_payments_chart(movement_repo.sum_payments_by_day(date_from, None))
+            self._render_cash_flow_chart(
+                movement_repo.sum_charges_and_payments_by_day(date_from, None)
+            )
             self._render_distribution_chart(movement_repo.sum_by_account(date_from, None))
 
-    def _render_payments_chart(self, data: list[tuple[dt.date, int]]) -> None:
-        _clear_layout(self._payments_chart_layout, keep_first=True)
+    def _render_cash_flow_chart(self, data: list[tuple[dt.date, int, int]]) -> None:
+        _clear_layout(self._cash_flow_chart_layout, keep_first=True)
         if not QTCHARTS_AVAILABLE or not data:
-            self._payments_chart_layout.addWidget(QLabel("Sin datos suficientes para graficar."))
+            self._cash_flow_chart_layout.addWidget(QLabel("Sin datos suficientes para graficar."))
             return
 
-        bar_set = QBarSet("Abonos")
+        charges = QBarSet("Cargos")
+        payments = QBarSet("Abonos")
         categories: list[str] = []
-        for day, cents in data:
-            bar_set.append(cents / 100)
+        for day, charge_cents, payment_cents in data:
+            charges.append(charge_cents / 100)
+            payments.append(payment_cents / 100)
             categories.append(day.strftime("%d/%m"))
 
         series = QBarSeries()
-        series.append(bar_set)
+        series.append(charges)
+        series.append(payments)
 
         chart = QChart()
         chart.addSeries(series)
-        chart.legend().setVisible(False)
+        chart.legend().setVisible(True)
 
         axis_x = QBarCategoryAxis()
         axis_x.append(categories)
@@ -167,7 +177,7 @@ class DashboardPage(QWidget):
 
         chart_view = QChartView(chart)
         chart_view.setMinimumHeight(220)
-        self._payments_chart_layout.addWidget(chart_view)
+        self._cash_flow_chart_layout.addWidget(chart_view)
 
     def _render_distribution_chart(self, data: list[tuple[str, int]]) -> None:
         _clear_layout(self._distribution_chart_layout, keep_first=True)

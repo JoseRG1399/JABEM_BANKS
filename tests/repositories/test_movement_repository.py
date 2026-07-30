@@ -194,6 +194,18 @@ def test_sum_totals_for_period(db_session, catalogs):
     assert payment_total == 395300
 
 
+def test_sum_charges_and_payments_by_day(db_session, catalogs):
+    repo = MovementRepository(db_session)
+
+    totals = repo.sum_charges_and_payments_by_day(None, None)
+
+    assert totals == [
+        (dt.date(2026, 7, 1), 15000, 0),
+        (dt.date(2026, 7, 2), 0, 395300),
+        (dt.date(2026, 7, 3), 5000, 0),
+    ]
+
+
 def test_sum_by_account(db_session, catalogs):
     repo = MovementRepository(db_session)
     totals = dict(repo.sum_by_account(None, None))

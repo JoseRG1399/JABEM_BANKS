@@ -1,7 +1,11 @@
 """Barra lateral de navegación fija."""
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+import sys
+from pathlib import Path
+
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QButtonGroup, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from app.config import APP_VERSION
@@ -57,6 +61,17 @@ class Sidebar(QWidget):
 
         layout.addStretch()
 
+        image = QPixmap(str(_sidebar_image_path()))
+        if not image.isNull():
+            image_label = QLabel()
+            image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            image_label.setPixmap(
+                image.scaledToWidth(
+                    SIDEBAR_WIDTH - 32, Qt.TransformationMode.SmoothTransformation
+                )
+            )
+            layout.addWidget(image_label)
+
         self.set_active("dashboard")
 
     def _on_clicked(self, key: str) -> None:
@@ -70,3 +85,9 @@ class Sidebar(QWidget):
             button.setProperty("active", "true" if is_active else "false")
             button.style().unpolish(button)
             button.style().polish(button)
+
+
+def _sidebar_image_path() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys._MEIPASS) / "public" / "images" / "Jabem.jpeg"
+    return Path(__file__).resolve().parents[3] / "public" / "images" / "Jabem.jpeg"
