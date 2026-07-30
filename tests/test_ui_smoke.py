@@ -20,6 +20,7 @@ from app.ui.dialogs.branch_dialog import BranchDialog
 from app.ui.dialogs.classify_movement_dialog import ClassifyMovementDialog
 from app.ui.dialogs.rule_dialog import RuleDialog
 from app.ui.main_window import MainWindow
+from app.ui.pages.import_page import ImportPage
 from app.ui.pages.reports_page import REPORT_TYPES, ReportsPage
 from app.ui.pages.settings_page import SettingsPage
 
@@ -98,6 +99,32 @@ def test_main_window_builds_and_navigates_all_pages(qapp, config, seeded_databas
     finally:
         window.close()
         window.deleteLater()
+
+
+def test_import_page_clear_form_resets_all_controls(qapp, config, seeded_database, tmp_path):
+    page = ImportPage(config, seeded_database)
+    try:
+        file_path = tmp_path / "movimientos.txt"
+        file_path.write_text("contenido de prueba", encoding="utf-8")
+        page._set_selected_file(str(file_path))
+
+        assert page._selected_file == file_path
+        assert page._bank_combo.currentData() is not None
+        assert page._account_combo.currentData() is not None
+
+        page._clear_form()
+
+        assert page._selected_file is None
+        assert page._bank_combo.currentIndex() == -1
+        assert page._account_combo.count() == 0
+        assert page._file_type_label.text() == ""
+        assert page._preview.toPlainText() == ""
+        assert page._validation_label.text() == ""
+        assert not page._validate_button.isEnabled()
+        assert not page._import_button.isEnabled()
+    finally:
+        page.close()
+        page.deleteLater()
 
 
 def test_classify_movement_dialog_builds(qapp, config, seeded_database):

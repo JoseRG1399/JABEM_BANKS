@@ -80,6 +80,21 @@ class MovementRepository:
         rows = query.group_by(Movement.movement_date).order_by(Movement.movement_date).all()
         return [(day, int(total)) for day, total in rows]
 
+    def sum_charges_and_payments_by_day(
+        self, date_from: dt.date | None, date_to: dt.date | None
+    ) -> list[tuple[dt.date, int, int]]:
+        query = self.session.query(
+            Movement.movement_date,
+            func.coalesce(func.sum(Movement.charge_cents), 0),
+            func.coalesce(func.sum(Movement.payment_cents), 0),
+        )
+        if date_from:
+            query = query.filter(Movement.movement_date >= date_from)
+        if date_to:
+            query = query.filter(Movement.movement_date <= date_to)
+        rows = query.group_by(Movement.movement_date).order_by(Movement.movement_date).all()
+        return [(day, int(charges), int(payments)) for day, charges, payments in rows]
+
     def sum_by_account(
         self, date_from: dt.date | None, date_to: dt.date | None
     ) -> list[tuple[str, int]]:

@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import sys
 import traceback
+from pathlib import Path
 
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from app.config import get_config
@@ -19,10 +21,19 @@ from app.database.migrator import ensure_database_ready
 from app.database.seed import seed_catalogs
 from app.database.session import get_database
 from app.services import backup_service
+from app.ui.dialogs.login_dialog import LoginDialog
 from app.ui.main_window import MainWindow
 from app.ui.theme import build_stylesheet
 from app.utils.dates import set_display_format
 from app.utils.logging import configure_logging, get_logger
+
+
+def _application_icon() -> QIcon:
+    if getattr(sys, "frozen", False):
+        icon_path = Path(sys._MEIPASS) / "public" / "images" / "Logo.ico"
+    else:
+        icon_path = Path(__file__).resolve().parent / "public" / "images" / "Logo.ico"
+    return QIcon(str(icon_path))
 
 
 def _install_exception_hook() -> None:
@@ -67,7 +78,13 @@ def main() -> None:
         logger.warning("No se pudo crear el respaldo automático: %s", exc)
 
     app = QApplication(sys.argv)
+    app.setWindowIcon(_application_icon())
     app.setStyleSheet(build_stylesheet(config.settings.theme))
+
+    login_dialog = LoginDialog(config)
+    if login_dialog.exec() != LoginDialog.DialogCode.Accepted:
+        logger.info("Acceso cancelado")
+        return
 
     window = MainWindow(config, database)
     window.show()

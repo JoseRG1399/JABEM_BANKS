@@ -1,5 +1,5 @@
 {
-  "app_name": "Analizador Bancario",
+  "app_name": "JABEM BANKS",
   "company_name": "Comercializadora Sarón Shekina SA de CV",
   "export_folder": "C:\\Users\\Dev Shekina\\Desktop\\ROSADEV\\banks\\data\\exports",
   "backup_folder": "C:\\Users\\Dev Shekina\\Desktop\\ROSADEV\\banks\\data\\backups",
@@ -7,5 +7,8 @@
   "rows_per_page": 100,
   "backup_frequency_days": 1,
   "currency": "MXN",
-  "theme": "dark"
+  "theme": "dark",
+  "login_username": "Josh",
+  "login_password_hash": "8e67c7d5746479058c35c99da001f7a520889e0889efc0602fe32b2d536c7e6d",
+  "login_password_salt": "5a62f7c2b1ce12edf523a830ab74ee63"
 }
