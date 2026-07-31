@@ -1,5 +1,5 @@
 {
-  "app_name": "JABEM BANKS",
+  "app_name": "Jabem Banks",
   "company_name": "Comercializadora Sarón Shekina SA de CV",
   "export_folder": "C:\\Users\\Dev Shekina\\Desktop\\ROSADEV\\banks\\data\\exports",
   "backup_folder": "C:\\Users\\Dev Shekina\\Desktop\\ROSADEV\\banks\\data\\backups",
@@ -8,7 +8,9 @@
   "backup_frequency_days": 1,
   "currency": "MXN",
   "theme": "dark",
-  "login_username": "Josh",
-  "login_password_hash": "8e67c7d5746479058c35c99da001f7a520889e0889efc0602fe32b2d536c7e6d",
-  "login_password_salt": "5a62f7c2b1ce12edf523a830ab74ee63"
+  "login_username": "Jose",
+  "login_password_hash": "b1a5f597b7ab766f14e55ba87aea5050aca4cd805ba118f6055ea9bb5b9d63f9",
+  "login_password_salt": "948d38dda6f7bb230c319c04efc09329",
+  "login_failed_attempts": 0,
+  "login_lockout_until": ""
 }

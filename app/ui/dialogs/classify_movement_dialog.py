@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.constants import MatchType
+from app.constants import ClassificationStatus, MatchType
 from app.database.session import Database
 from app.models import Movement
 from app.repositories.bank_repository import BankRepository
@@ -52,6 +52,7 @@ class ClassifyMovementDialog(QDialog):
         super().__init__(parent)
         self._database = database
         self._movement_ids = movement_ids
+        self._already_classified_count = 0
         self.setWindowTitle("Reclasificar movimiento(s)")
         self.setMinimumWidth(480)
 
@@ -62,9 +63,10 @@ class ClassifyMovementDialog(QDialog):
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
 
-        summary = QLabel(f"{len(self._movement_ids)} movimiento(s) seleccionado(s).")
-        summary.setObjectName("cardLabel")
-        layout.addWidget(summary)
+        self._summary_label = QLabel(f"{len(self._movement_ids)} movimiento(s) seleccionado(s).")
+        self._summary_label.setObjectName("cardLabel")
+        self._summary_label.setWordWrap(True)
+        layout.addWidget(self._summary_label)
 
         self._preview_list = QListWidget()
         self._preview_list.setMaximumHeight(90)
@@ -158,6 +160,8 @@ class ClassifyMovementDialog(QDialog):
                 movement: Movement | None = movement_repo.get_by_id(movement_id)
                 if movement is None:
                     continue
+                if movement.classification_status != ClassificationStatus.UNCLASSIFIED.value:
+                    self._already_classified_count += 1
                 if first_bank_account_id is None:
                     first_bank_account_id = movement.bank_account_id
                 self._preview_list.addItem(
@@ -171,6 +175,16 @@ class ClassifyMovementDialog(QDialog):
                 index = self._rule_account_combo.findData(first_bank_account_id)
                 if index >= 0:
                     self._rule_account_combo.setCurrentIndex(index)
+
+        if self._already_classified_count:
+            self._summary_label.setText(
+                f"{len(self._movement_ids)} movimiento(s) seleccionado(s) — "
+                f"{self._already_classified_count} ya tienen una clasificación asignada. "
+                "Guardar sobrescribirá su sucursal/categoría actual."
+            )
+            self._summary_label.setObjectName("statusWarning")
+            self._summary_label.style().unpolish(self._summary_label)
+            self._summary_label.style().polish(self._summary_label)
 
     # ------------------------------------------------------------------
     def _on_test_rule(self) -> None:
@@ -202,6 +216,20 @@ class ClassifyMovementDialog(QDialog):
                 self, "Patrón requerido", "Escribe un patrón para la nueva regla."
             )
             return
+
+        if self._already_classified_count:
+            answer = QMessageBox.question(
+                self,
+                "Confirmar reclasificación",
+                f"{self._already_classified_count} de los {len(self._movement_ids)} "
+                "movimiento(s) seleccionados ya tienen una sucursal/categoría asignada. "
+                "Esta acción sobrescribirá su clasificación actual y no se puede deshacer "
+                "automáticamente. ¿Deseas continuar?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
 
         request = ReclassifyRequest(
             movement_ids=self._movement_ids,

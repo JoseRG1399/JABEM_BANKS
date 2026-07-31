@@ -6,6 +6,7 @@ import datetime as dt
 from pathlib import Path
 
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QComboBox,
     QDateEdit,
     QFileDialog,
@@ -29,6 +30,7 @@ from app.repositories.category_repository import CategoryRepository
 from app.repositories.imported_file_repository import ImportedFileRepository
 from app.repositories.movement_repository import MovementFilter, MovementRepository
 from app.services import export_service
+from app.ui.dialogs.classify_movement_dialog import ClassifyMovementDialog
 from app.ui.dialogs.movement_detail_dialog import MovementDetailDialog
 from app.ui.widgets.filter_bar import FilterBar
 from app.ui.widgets.pagination import Pagination
@@ -135,14 +137,29 @@ class MovementsPage(QWidget):
 
         outer.addWidget(self._filter_bar)
 
+        selection_row = QHBoxLayout()
+        self._selection_label = QLabel("0 movimiento(s) seleccionado(s)")
+        self._selection_label.setObjectName("cardLabel")
+        selection_row.addWidget(self._selection_label)
+        selection_row.addStretch()
+
+        self._reclassify_button = QPushButton("Reclasificar seleccionados")
+        self._reclassify_button.setObjectName("primaryButton")
+        self._reclassify_button.setEnabled(False)
+        self._reclassify_button.clicked.connect(self._on_reclassify_selected)
+        selection_row.addWidget(self._reclassify_button)
+        outer.addLayout(selection_row)
+
         self._table = QTableWidget(0, len(COLUMNS))
         self._table.setHorizontalHeaderLabels(COLUMNS)
         self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self._table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._table.setAlternatingRowColors(True)
         self._table.horizontalHeader().setStretchLastSection(True)
         self._table.horizontalHeader().sectionClicked.connect(self._on_header_clicked)
         self._table.cellDoubleClicked.connect(self._on_row_double_clicked)
+        self._table.itemSelectionChanged.connect(self._on_selection_changed)
         outer.addWidget(self._table, stretch=1)
 
         footer = QHBoxLayout()
@@ -344,6 +361,29 @@ class MovementsPage(QWidget):
                 f"Cargo total: {format_currency(result.total_charge_cents)}  |  "
                 f"Abono total: {format_currency(result.total_payment_cents)}"
             )
+
+        self._on_selection_changed()
+
+    # ------------------------------------------------------------------
+    # Reclasificación (incluye movimientos ya clasificados, a diferencia de
+    # la pantalla "Sin clasificar" que solo trabaja con los pendientes)
+    # ------------------------------------------------------------------
+    def _selected_movement_ids(self) -> list[int]:
+        rows = {index.row() for index in self._table.selectedIndexes()}
+        return [self._row_movement_ids[row] for row in sorted(rows) if row < len(self._row_movement_ids)]
+
+    def _on_selection_changed(self) -> None:
+        count = len(self._selected_movement_ids())
+        self._selection_label.setText(f"{count} movimiento(s) seleccionado(s)")
+        self._reclassify_button.setEnabled(count > 0)
+
+    def _on_reclassify_selected(self) -> None:
+        movement_ids = self._selected_movement_ids()
+        if not movement_ids:
+            return
+        dialog = ClassifyMovementDialog(self._database, movement_ids, parent=self)
+        if dialog.exec():
+            self._load_page()
 
     def _on_export(self) -> None:
         filters = self._current_filters()

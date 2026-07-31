@@ -30,6 +30,7 @@ class ImportedFileStatus(str, enum.Enum):
 class FileType(str, enum.Enum):
     TXT = "TXT"
     CSV = "CSV"
+    XLSX = "XLSX"
 
 
 class ClassificationStatus(str, enum.Enum):
