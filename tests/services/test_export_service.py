@@ -8,7 +8,14 @@ from app.models import BankAccount, Branch, ImportedFile, Movement, MovementCate
 from app.repositories.movement_repository import MovementFilter
 from app.schemas.report_filter import ReportFilter
 from app.services import export_service
-from app.services.report_service import ConsolidatedReport, ConsolidatedBranchRow, ConsolidatedDayGroup, ReportRow
+from app.services.report_service import (
+    BranchDayPivotReport,
+    BranchPivotRow,
+    ConsolidatedBranchRow,
+    ConsolidatedDayGroup,
+    ConsolidatedReport,
+    ReportRow,
+)
 
 
 def test_build_safe_filename_strips_unsafe_characters():
@@ -149,3 +156,42 @@ def test_export_consolidated_report_to_excel(tmp_path):
     assert ws["A5"].value == "Día / Sucursal"
     assert ws["A6"].value == "01/07/2026"
     assert ws["D6"].value == 1500.0  # total del día (BBVA 1000 + MIFEL 500)
+
+
+def test_export_branch_day_pivot_to_excel(tmp_path):
+    report = BranchDayPivotReport(
+        days=[dt.date(2026, 7, 1), dt.date(2026, 7, 2)],
+        branch_rows=[
+            BranchPivotRow(
+                branch_label="01. ALFREDO",
+                values_by_day={dt.date(2026, 7, 1): 100000, dt.date(2026, 7, 2): 20000},
+            ),
+            BranchPivotRow(
+                branch_label="02. COLON",
+                values_by_day={dt.date(2026, 7, 1): 50000},
+            ),
+        ],
+    )
+    output_path = tmp_path / "sucursal_dia.xlsx"
+    export_service.export_branch_day_pivot_to_excel(
+        report, "Abono", ReportFilter(), output_path, generated_at=dt.datetime(2026, 7, 29, 10, 0)
+    )
+
+    workbook = load_workbook(output_path)
+    ws = workbook["Sucursal-Dia"]
+    assert ws["A1"].value == "Tabla consolidada por sucursal y día"
+    assert ws["A4"].value == "Valor mostrado: Abono"
+    assert ws["A5"].value == "Sucursal"
+    assert ws["B5"].value == "01/07/2026"
+    assert ws["C5"].value == "02/07/2026"
+    assert ws["D5"].value == "Total general"
+    assert ws["A6"].value == "01. ALFREDO"
+    assert ws["B6"].value == 1000.0
+    assert ws["C6"].value == 200.0
+    assert ws["D6"].value == 1200.0  # total de la sucursal
+    assert ws["A7"].value == "02. COLON"
+    assert ws["B7"].value == 500.0
+    assert ws["C7"].value is None
+    assert ws["A8"].value == "TOTAL GENERAL"
+    assert ws["B8"].value == 1500.0  # total del día 01/07
+    assert ws["D8"].value == 1700.0  # gran total

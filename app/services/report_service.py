@@ -11,7 +11,7 @@ import datetime as dt
 from dataclasses import dataclass, field
 from enum import Enum
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Query, Session
 
 from app.constants import CategoryCode
@@ -63,6 +63,17 @@ def _sums() -> tuple:
     )
 
 
+def _excluding_categories(query: Query, codes: list[str]) -> Query:
+    """Descarta movimientos cuya categoría esté en ``codes``.
+
+    Los movimientos sin categoría asignada se conservan: el filtro solo
+    excluye coincidencias explícitas.
+    """
+    return query.outerjoin(
+        MovementCategory, Movement.category_id == MovementCategory.id
+    ).filter(or_(MovementCategory.code.is_(None), MovementCategory.code.notin_(codes)))
+
+
 # ---------------------------------------------------------------------------
 # 1. Totales por día
 # ---------------------------------------------------------------------------
@@ -81,11 +92,17 @@ def totals_by_day(session: Session, filters: ReportFilter) -> list[ReportRow]:
 # 2. Totales por banco
 # ---------------------------------------------------------------------------
 def totals_by_bank(session: Session, filters: ReportFilter) -> list[ReportRow]:
+    """Totales por banco, sin contar devoluciones de IVA ni traspasos: esos
+    movimientos no reflejan actividad real del negocio y distorsionarían el
+    total (sección 15.8)."""
     charge_sum, payment_sum = _sums()
     query = (
         session.query(Bank.name, charge_sum, payment_sum)
         .join(BankAccount, BankAccount.bank_id == Bank.id)
         .join(Movement, Movement.bank_account_id == BankAccount.id)
+    )
+    query = _excluding_categories(
+        query, [CategoryCode.VAT_REFUND.value, CategoryCode.TRANSFER.value]
     )
     query = _apply_common_filters(query, filters, joined_account=True)
     rows = query.group_by(Bank.name).order_by(Bank.name).all()
@@ -303,3 +320,78 @@ def consolidated_by_date_branch_account(
     ]
 
     return ConsolidatedReport(account_aliases=account_aliases, day_groups=day_groups)
+
+
+# ---------------------------------------------------------------------------
+# 9. Tabla consolidada por sucursal y día (pivote)
+# ---------------------------------------------------------------------------
+@dataclass
+class BranchPivotRow:
+    branch_label: str
+    values_by_day: dict[dt.date, int] = field(default_factory=dict)
+
+    @property
+    def total_cents(self) -> int:
+        return sum(self.values_by_day.values())
+
+
+@dataclass
+class BranchDayPivotReport:
+    days: list[dt.date] = field(default_factory=list)
+    branch_rows: list[BranchPivotRow] = field(default_factory=list)
+
+    @property
+    def totals_by_day(self) -> dict[dt.date, int]:
+        totals: dict[dt.date, int] = {day: 0 for day in self.days}
+        for branch_row in self.branch_rows:
+            for day, value in branch_row.values_by_day.items():
+                totals[day] = totals.get(day, 0) + value
+        return totals
+
+    @property
+    def grand_total_cents(self) -> int:
+        return sum(branch_row.total_cents for branch_row in self.branch_rows)
+
+
+def branch_day_pivot(
+    session: Session,
+    filters: ReportFilter,
+    value_type: ReportValueType = ReportValueType.PAYMENT,
+) -> BranchDayPivotReport:
+    """Variante en forma de pivote de la tabla consolidada: una fila por
+    sucursal y una columna por día (como la bitácora que antes se llenaba a
+    mano), sumando todas las cuentas bancarias en cada celda. Igual que el
+    consolidado, solo incluye movimientos con sucursal identificada.
+    """
+    value_column = _value_column(value_type)
+
+    query = session.query(
+        Branch.branch_number, Branch.name, Movement.movement_date, value_column
+    ).join(Branch, Movement.branch_id == Branch.id)
+    query = _apply_common_filters(query, filters)
+    rows = (
+        query.group_by(Branch.branch_number, Branch.name, Movement.movement_date)
+        .order_by(Branch.branch_number, Movement.movement_date)
+        .all()
+    )
+
+    days: list[dt.date] = []
+    branch_rows: list[BranchPivotRow] = []
+    branch_index: dict[str, BranchPivotRow] = {}
+
+    for branch_number, branch_name, movement_date, value in rows:
+        if movement_date not in days:
+            days.append(movement_date)
+
+        branch_label = f"{branch_number}. {branch_name}"
+        branch_row = branch_index.get(branch_label)
+        if branch_row is None:
+            branch_row = BranchPivotRow(branch_label=branch_label)
+            branch_index[branch_label] = branch_row
+            branch_rows.append(branch_row)
+        branch_row.values_by_day[movement_date] = (
+            branch_row.values_by_day.get(movement_date, 0) + int(value)
+        )
+
+    days.sort()
+    return BranchDayPivotReport(days=days, branch_rows=branch_rows)

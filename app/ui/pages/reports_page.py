@@ -4,6 +4,7 @@ from __future__ import annotations
 import datetime as dt
 from pathlib import Path
 
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QComboBox,
     QDateEdit,
@@ -28,7 +29,12 @@ from app.repositories.branch_repository import BranchRepository
 from app.repositories.category_repository import CategoryRepository
 from app.schemas.report_filter import ReportFilter
 from app.services import export_service, report_service
-from app.services.report_service import ConsolidatedReport, ReportRow, ReportValueType
+from app.services.report_service import (
+    BranchDayPivotReport,
+    ConsolidatedReport,
+    ReportRow,
+    ReportValueType,
+)
 from app.utils.dates import format_date_for_display
 from app.utils.money import format_currency
 
@@ -41,7 +47,10 @@ REPORT_TYPES = [
     ("Movimientos sin clasificar", "unclassified"),
     ("Comisiones e IVA", "commissions"),
     ("Tabla consolidada (fecha / sucursal / cuenta)", "consolidated"),
+    ("Tabla consolidada por sucursal y día (pivote)", "branch_day_pivot"),
 ]
+
+PIVOT_TOTAL_LABEL = "Total general"
 
 VALUE_TYPE_OPTIONS = [
     ("Abono", ReportValueType.PAYMENT),
@@ -60,6 +69,7 @@ class ReportsPage(QWidget):
         self._current_rows: list[ReportRow] = []
         self._current_unclassified: list = []
         self._current_consolidated: ConsolidatedReport | None = None
+        self._current_pivot: BranchDayPivotReport | None = None
         self._current_title = ""
         self._build_ui()
         self._populate_lookup_combos()
@@ -151,6 +161,11 @@ class ReportsPage(QWidget):
         self._tree.setHeaderLabels(["Día / Sucursal", "Total"])
         self._results_stack.addWidget(self._tree)
 
+        self._pivot_table = QTableWidget(0, 0)
+        self._pivot_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._pivot_table.horizontalHeader().setStretchLastSection(True)
+        self._results_stack.addWidget(self._pivot_table)
+
         outer.addWidget(self._results_stack, stretch=1)
 
         self._totals_label = QLabel("")
@@ -194,11 +209,13 @@ class ReportsPage(QWidget):
 
     def _on_report_type_changed(self) -> None:
         key = self._current_report_key()
-        self._value_type_combo.setVisible(key == "consolidated")
+        self._value_type_combo.setVisible(key in ("consolidated", "branch_day_pivot"))
         if key == "unclassified":
             self._results_stack.setCurrentWidget(self._unclassified_table)
         elif key == "consolidated":
             self._results_stack.setCurrentWidget(self._tree)
+        elif key == "branch_day_pivot":
+            self._results_stack.setCurrentWidget(self._pivot_table)
         else:
             self._results_stack.setCurrentWidget(self._simple_table)
 
@@ -246,6 +263,10 @@ class ReportsPage(QWidget):
                     session, filters, value_type
                 )
                 self._render_consolidated_tree()
+            elif key == "branch_day_pivot":
+                value_type = self._value_type_combo.currentData()
+                self._current_pivot = report_service.branch_day_pivot(session, filters, value_type)
+                self._render_branch_day_pivot()
 
     def _render_simple_table(self) -> None:
         rows = self._current_rows
@@ -325,6 +346,49 @@ class ReportsPage(QWidget):
         )
         self._totals_label.setText(f"Total general: {format_currency(report.grand_total_cents)}  |  {totals_text}")
 
+    def _render_branch_day_pivot(self) -> None:
+        report = self._current_pivot
+        self._pivot_table.clear()
+        if report is None:
+            self._pivot_table.setRowCount(0)
+            self._pivot_table.setColumnCount(0)
+            return
+
+        bold_font = QFont()
+        bold_font.setBold(True)
+
+        headers = ["Sucursal", *[format_date_for_display(day) for day in report.days], PIVOT_TOTAL_LABEL]
+        total_column = len(headers) - 1
+        self._pivot_table.setColumnCount(len(headers))
+        self._pivot_table.setHorizontalHeaderLabels(headers)
+        self._pivot_table.setRowCount(len(report.branch_rows) + 1)
+
+        for row_index, branch_row in enumerate(report.branch_rows):
+            self._pivot_table.setItem(row_index, 0, QTableWidgetItem(branch_row.branch_label))
+            for col_index, day in enumerate(report.days, start=1):
+                value = branch_row.values_by_day.get(day)
+                text = format_currency(value) if value else ""
+                self._pivot_table.setItem(row_index, col_index, QTableWidgetItem(text))
+            total_item = QTableWidgetItem(format_currency(branch_row.total_cents))
+            total_item.setFont(bold_font)
+            self._pivot_table.setItem(row_index, total_column, total_item)
+
+        totals_row = len(report.branch_rows)
+        totals_by_day = report.totals_by_day
+        totals_label_item = QTableWidgetItem(PIVOT_TOTAL_LABEL)
+        totals_label_item.setFont(bold_font)
+        self._pivot_table.setItem(totals_row, 0, totals_label_item)
+        for col_index, day in enumerate(report.days, start=1):
+            day_total_item = QTableWidgetItem(format_currency(totals_by_day.get(day, 0)))
+            day_total_item.setFont(bold_font)
+            self._pivot_table.setItem(totals_row, col_index, day_total_item)
+        grand_total_item = QTableWidgetItem(format_currency(report.grand_total_cents))
+        grand_total_item.setFont(bold_font)
+        self._pivot_table.setItem(totals_row, total_column, grand_total_item)
+
+        self._pivot_table.resizeColumnsToContents()
+        self._totals_label.setText(f"Total general: {format_currency(report.grand_total_cents)}")
+
     # ------------------------------------------------------------------
     def _on_export(self) -> None:
         key = self._current_report_key()
@@ -338,6 +402,19 @@ class ReportsPage(QWidget):
                 default_name,
                 lambda path: export_service.export_consolidated_report_to_excel(
                     self._current_consolidated,
+                    self._value_type_combo.currentText(),
+                    filters,
+                    path,
+                ),
+            )
+        elif key == "branch_day_pivot" and self._current_pivot is not None:
+            default_name = export_service.build_safe_filename(
+                "reporte_sucursales_dia", filters.date_from, filters.date_to
+            )
+            self._save_and_export(
+                default_name,
+                lambda path: export_service.export_branch_day_pivot_to_excel(
+                    self._current_pivot,
                     self._value_type_combo.currentText(),
                     filters,
                     path,

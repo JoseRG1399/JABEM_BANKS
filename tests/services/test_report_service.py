@@ -138,6 +138,53 @@ def test_totals_by_bank(db_session, scenario):
     assert totals["Mifel"] == 50000
 
 
+def test_totals_by_bank_excludes_vat_refund_and_transfers(db_session, scenario):
+    bbva = scenario["bbva"]
+    imported_file = db_session.query(ImportedFile).one()
+    vat_refund_category = db_session.query(MovementCategory).filter_by(code="VAT_REFUND").one()
+    transfer_category = db_session.query(MovementCategory).filter_by(code="TRANSFER").one()
+
+    db_session.add_all(
+        [
+            Movement(
+                bank_account_id=bbva.id,
+                category_id=vat_refund_category.id,
+                imported_file_id=imported_file.id,
+                movement_date=dt.date(2026, 7, 1),
+                description_original="DEVOLUCION IVA",
+                normalized_text="DEVOLUCION IVA",
+                payment_cents=9000,
+                movement_hash="vat-refund",
+                occurrence_number=1,
+                classification_status="CLASSIFIED",
+                classification_method="MANUAL",
+                source_row_number=1,
+            ),
+            Movement(
+                bank_account_id=bbva.id,
+                category_id=transfer_category.id,
+                imported_file_id=imported_file.id,
+                movement_date=dt.date(2026, 7, 1),
+                description_original="TRASPASO",
+                normalized_text="TRASPASO",
+                payment_cents=7000,
+                movement_hash="transfer",
+                occurrence_number=1,
+                classification_status="CLASSIFIED",
+                classification_method="MANUAL",
+                source_row_number=1,
+            ),
+        ]
+    )
+    db_session.flush()
+
+    rows = report_service.totals_by_bank(db_session, ReportFilter())
+    totals = {row.label: row.payment_cents for row in rows}
+    # BBVA sigue en 120000: la devolución de IVA y el traspaso quedan fuera.
+    assert totals["BBVA"] == 120000
+    assert totals["Mifel"] == 50000
+
+
 def test_totals_by_account(db_session, scenario):
     rows = report_service.totals_by_account(db_session, ReportFilter())
     totals = {row.label: row.payment_cents for row in rows}
@@ -215,3 +262,29 @@ def test_consolidated_report_excludes_movements_without_branch(db_session, scena
     total_branch_rows = sum(len(g.branch_rows) for g in report.day_groups)
     # Solo 3 movimientos del escenario tienen sucursal asignada.
     assert total_branch_rows == 3
+
+
+def test_branch_day_pivot_structure(db_session, scenario):
+    report = report_service.branch_day_pivot(db_session, ReportFilter())
+
+    assert report.days == [dt.date(2026, 7, 1), dt.date(2026, 7, 2)]
+
+    alfredo = next(row for row in report.branch_rows if row.branch_label == "01. ALFREDO")
+    assert alfredo.values_by_day[dt.date(2026, 7, 1)] == 100000
+    assert alfredo.values_by_day[dt.date(2026, 7, 2)] == 20000
+    assert alfredo.total_cents == 120000
+
+    colon = next(row for row in report.branch_rows if row.branch_label == "02. COLON")
+    assert colon.values_by_day == {dt.date(2026, 7, 1): 50000}
+    assert colon.total_cents == 50000
+
+    assert report.totals_by_day[dt.date(2026, 7, 1)] == 150000
+    assert report.totals_by_day[dt.date(2026, 7, 2)] == 20000
+    assert report.grand_total_cents == 170000
+
+
+def test_branch_day_pivot_excludes_movements_without_branch(db_session, scenario):
+    report = report_service.branch_day_pivot(db_session, ReportFilter())
+    total_cells = sum(len(row.values_by_day) for row in report.branch_rows)
+    # Solo 3 movimientos del escenario tienen sucursal asignada.
+    assert total_cells == 3

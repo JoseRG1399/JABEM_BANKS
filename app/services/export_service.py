@@ -21,7 +21,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 from app.models import Movement
 from app.repositories.movement_repository import MovementFilter
 from app.schemas.report_filter import ReportFilter
-from app.services.report_service import ConsolidatedReport, ReportRow
+from app.services.report_service import BranchDayPivotReport, ConsolidatedReport, ReportRow
 from app.utils.dates import format_date_for_display
 from app.utils.money import cents_to_decimal
 from app.utils.text import sanitize_for_spreadsheet
@@ -207,6 +207,65 @@ def export_simple_report_to_excel(
     ws.freeze_panes = ws.cell(row=start_row + 1, column=1).coordinate
     if last_data_row >= start_row:
         ws.auto_filter.ref = f"A{start_row}:D{last_data_row}"
+    _autosize_columns(ws, len(headers))
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    workbook.save(output_path)
+    return output_path
+
+
+# ---------------------------------------------------------------------------
+# Tabla consolidada por sucursal y día (pivote)
+# ---------------------------------------------------------------------------
+def export_branch_day_pivot_to_excel(
+    report: BranchDayPivotReport,
+    value_type_label: str,
+    filters: ReportFilter,
+    output_path: Path,
+    generated_at: dt.datetime | None = None,
+) -> Path:
+    generated_at = generated_at or dt.datetime.now()
+    workbook = Workbook()
+    ws = workbook.active
+    ws.title = "Sucursal-Dia"
+
+    start_row = _write_header_info(
+        ws, "Tabla consolidada por sucursal y día", generated_at, describe_filters(filters)
+    )
+    ws["A4"] = f"Valor mostrado: {value_type_label}"
+
+    headers = ["Sucursal", *[format_date_for_display(day) for day in report.days], "Total general"]
+    for col_index, header in enumerate(headers, start=1):
+        cell = ws.cell(row=start_row, column=col_index, value=header)
+        cell.fill = HEADER_FILL
+        cell.font = HEADER_FONT
+
+    current_row = start_row + 1
+    for branch_row in report.branch_rows:
+        ws.cell(row=current_row, column=1, value=sanitize_for_spreadsheet(branch_row.branch_label))
+        for col_index, day in enumerate(report.days, start=2):
+            cell = ws.cell(
+                row=current_row, column=col_index, value=_money(branch_row.values_by_day.get(day))
+            )
+            cell.number_format = MONEY_FORMAT
+        total_cell = ws.cell(row=current_row, column=len(headers), value=_money(branch_row.total_cents))
+        total_cell.number_format = MONEY_FORMAT
+        total_cell.font = BOLD
+        current_row += 1
+
+    total_row = current_row
+    ws.cell(row=total_row, column=1, value="TOTAL GENERAL").font = BOLD
+    totals_by_day = report.totals_by_day
+    for col_index, day in enumerate(report.days, start=2):
+        cell = ws.cell(row=total_row, column=col_index, value=_money(totals_by_day.get(day, 0)))
+        cell.number_format = MONEY_FORMAT
+        cell.font = BOLD
+    grand_total_cell = ws.cell(row=total_row, column=len(headers), value=_money(report.grand_total_cents))
+    grand_total_cell.number_format = MONEY_FORMAT
+    grand_total_cell.font = BOLD
+
+    ws.freeze_panes = ws.cell(row=start_row + 1, column=2).coordinate
+    ws.auto_filter.ref = f"A{start_row}:{get_column_letter(len(headers))}{total_row}"
     _autosize_columns(ws, len(headers))
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
