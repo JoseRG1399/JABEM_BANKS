@@ -58,7 +58,7 @@ class UnclassifiedPage(QWidget):
 
         self._date_from = QDateEdit(calendarPopup=True)
         self._date_from.setDisplayFormat("dd/MM/yyyy")
-        self._date_from.setDate(dt.date(2000, 1, 1))
+        self._date_from.setDate(dt.date.today())
         self._filter_bar.add_field("Fecha inicial", self._date_from)
 
         self._date_to = QDateEdit(calendarPopup=True)
@@ -137,7 +137,7 @@ class UnclassifiedPage(QWidget):
         self._load_page()
 
     def _on_clear_filters(self) -> None:
-        self._date_from.setDate(dt.date(2000, 1, 1))
+        self._date_from.setDate(dt.date.today())
         self._date_to.setDate(dt.date.today())
         self._account_combo.setCurrentIndex(0)
         self._text_edit.clear()

@@ -95,7 +95,7 @@ class ReportsPage(QWidget):
         filters_row.addWidget(QLabel("Desde:"))
         self._date_from = QDateEdit(calendarPopup=True)
         self._date_from.setDisplayFormat("dd/MM/yyyy")
-        self._date_from.setDate(dt.date(2000, 1, 1))
+        self._date_from.setDate(dt.date.today())
         filters_row.addWidget(self._date_from)
 
         filters_row.addWidget(QLabel("Hasta:"))
