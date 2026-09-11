@@ -199,6 +199,20 @@ def test_totals_by_branch(db_session, scenario):
     assert totals["02. COLON"] == 50000
 
 
+def test_totals_by_branch_filters_by_selected_branch_ids(db_session, scenario):
+    filters = ReportFilter(branch_ids=[scenario["branch_colon"].id])
+    rows = report_service.totals_by_branch(db_session, filters)
+    totals = {row.label: row.payment_cents for row in rows}
+    assert totals == {"02. COLON": 50000}
+
+    filters = ReportFilter(
+        branch_ids=[scenario["branch_alfredo"].id, scenario["branch_colon"].id]
+    )
+    rows = report_service.totals_by_branch(db_session, filters)
+    totals = {row.label: row.payment_cents for row in rows}
+    assert totals == {"01. ALFREDO": 120000, "02. COLON": 50000}
+
+
 def test_totals_by_category(db_session, scenario):
     rows = report_service.totals_by_category(db_session, ReportFilter())
     by_label = {row.label: row for row in rows}

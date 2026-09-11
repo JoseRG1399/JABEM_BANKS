@@ -49,8 +49,8 @@ def _apply_common_filters(query: Query, filters: ReportFilter, joined_account: b
         )
     elif filters.bank_id and joined_account:
         query = query.filter(BankAccount.bank_id == filters.bank_id)
-    if filters.branch_id:
-        query = query.filter(Movement.branch_id == filters.branch_id)
+    if filters.branch_ids:
+        query = query.filter(Movement.branch_id.in_(filters.branch_ids))
     if filters.category_id:
         query = query.filter(Movement.category_id == filters.category_id)
     return query

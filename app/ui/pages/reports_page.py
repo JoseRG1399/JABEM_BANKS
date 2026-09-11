@@ -35,6 +35,7 @@ from app.services.report_service import (
     ReportRow,
     ReportValueType,
 )
+from app.ui.widgets.multi_select_combo import MultiSelectComboBox
 from app.utils.dates import format_date_for_display
 from app.utils.money import format_currency
 
@@ -123,8 +124,9 @@ class ReportsPage(QWidget):
         filters_row.addWidget(self._account_combo)
 
         filters_row.addWidget(QLabel("Sucursal:"))
-        self._branch_combo = QComboBox()
-        filters_row.addWidget(self._branch_combo)
+        self._branch_filter = MultiSelectComboBox(placeholder="Todas")
+        self._branch_filter.setMinimumWidth(160)
+        filters_row.addWidget(self._branch_filter)
 
         filters_row.addWidget(QLabel("Categoría:"))
         self._category_combo = QComboBox()
@@ -186,8 +188,8 @@ class ReportsPage(QWidget):
             self._fill_combo(
                 self._account_combo, [(a.alias, a.id) for a in bank_repo.list_accounts()]
             )
-            self._fill_combo(
-                self._branch_combo, [(b.name, b.id) for b in branch_repo.list_all()]
+            self._branch_filter.set_items(
+                [(f"{b.branch_number}. {b.name}", b.id) for b in branch_repo.list_all()]
             )
             self._fill_combo(
                 self._category_combo, [(c.name, c.id) for c in category_repo.list_all()]
@@ -225,7 +227,7 @@ class ReportsPage(QWidget):
             date_to=self._date_to.date().toPython(),
             bank_id=self._bank_combo.currentData(),
             bank_account_id=self._account_combo.currentData(),
-            branch_id=self._branch_combo.currentData(),
+            branch_ids=self._branch_filter.checked_values() or None,
             category_id=self._category_combo.currentData(),
         )
 
