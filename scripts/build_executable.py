@@ -5,11 +5,21 @@ Uso:
 
 Genera: dist/AnalizadorBancario/AnalizadorBancario.exe
 
-Decisión de diseño: el ejecutable NO incluye ``alembic.ini`` ni las
-migraciones. ``app/database/migrator.py`` detecta su ausencia y crea el
-esquema directamente desde los modelos (``Base.metadata.create_all``), que
-es equivalente para una base de datos nueva. Esto evita los problemas de
-rutas relativas de Alembic dentro de un paquete congelado.
+El ejecutable incluye ``alembic.ini`` y la carpeta de migraciones
+(``app/database/migrations``): ``app/database/migrator.py`` los localiza en
+``sys._MEIPASS`` cuando corre empaquetado y aplica las migraciones
+pendientes con Alembic, igual que en desarrollo. Esto es lo que permite que
+instalar una versión nueva sobre una base de datos ya en uso agregue las
+columnas/tablas nuevas sin perder los datos existentes, en vez de recurrir
+a ``Base.metadata.create_all`` (que solo sirve para una base de datos
+nueva y jamás altera tablas que ya existen).
+
+``app/database/migrations/env.py`` se agrega como archivo de datos, no como
+módulo: Alembic lo carga en tiempo de ejecución con ``exec()`` (no con un
+``import`` normal), así que PyInstaller nunca rastrea sus imports al
+analizar el grafo de dependencias. Por eso se declaran a mano como
+``--hidden-import`` los que ``env.py`` necesita y que ningún otro módulo ya
+importa de forma normal (p. ej. ``logging.config``, usado solo ahí).
 """
 from __future__ import annotations
 
@@ -31,6 +41,9 @@ def main() -> None:
         f"--workpath={PROJECT_ROOT / 'build'}",
         f"--specpath={PROJECT_ROOT}",
         f"--add-data={PROJECT_ROOT / 'public' / 'images'}{';'}public/images",
+        f"--add-data={PROJECT_ROOT / 'alembic.ini'}{';'}.",
+        f"--add-data={PROJECT_ROOT / 'app' / 'database' / 'migrations'}{';'}app/database/migrations",
+        "--hidden-import=logging.config",
     ]
 
     if ICON_PATH.exists():
