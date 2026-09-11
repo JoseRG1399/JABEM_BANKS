@@ -2,7 +2,13 @@ from decimal import Decimal
 
 import pytest
 
-from app.utils.money import cents_to_decimal, format_currency, money_to_cents, parse_money
+from app.utils.money import (
+    cents_to_decimal,
+    format_currency,
+    invert_charge_to_negative_payment,
+    money_to_cents,
+    parse_money,
+)
 
 
 @pytest.mark.parametrize(
@@ -48,3 +54,16 @@ def test_format_currency():
     assert format_currency(395300) == "$3,953.00"
     assert format_currency(0) == "$0.00"
     assert format_currency(-150) == "-$1.50"
+
+
+def test_invert_charge_to_negative_payment_moves_charge_into_negative_payment():
+    # Caso típico: "Dev. deb nac..." llega como cargo puro.
+    assert invert_charge_to_negative_payment(6400, 0) == (0, -6400)
+
+
+def test_invert_charge_to_negative_payment_nets_against_existing_payment():
+    assert invert_charge_to_negative_payment(500, 2000) == (0, 1500)
+
+
+def test_invert_charge_to_negative_payment_leaves_pure_payments_unchanged():
+    assert invert_charge_to_negative_payment(0, 5000) == (0, 5000)

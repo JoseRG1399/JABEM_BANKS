@@ -2,9 +2,9 @@ from pathlib import Path
 
 import pytest
 
-from app.constants import ImportedFileStatus
+from app.constants import CategoryCode, ImportedFileStatus, MatchType
 from app.database.seed import seed_catalogs
-from app.models import BankAccount, Movement
+from app.models import BankAccount, ClassificationRule, Movement, MovementCategory
 from app.services.import_service import DuplicateFileError, import_file
 
 DATE_W = 12
@@ -75,6 +75,52 @@ def test_import_new_file_inserts_and_classifies_movements(tmp_path, db_session, 
     assert movements[0].classification_method == "SPECIAL_RULE"
     assert movements[1].classification_method == "BRANCH_IDENTIFIER"
     assert movements[1].branch_id is not None
+
+
+def test_rule_with_invert_flag_turns_charge_into_negative_payment_on_import(
+    tmp_path, db_session, bbva_account
+):
+    # Categoría "Sucursal": esta devolución sigue siendo de una sucursal, así
+    # que debe seguir contando en sus reportes (a diferencia de "Devolución
+    # de IVA"/"Traspaso", que sí se excluyen de "Totales por banco").
+    branch_category = (
+        db_session.query(MovementCategory).filter_by(code=CategoryCode.BRANCH.value).one()
+    )
+    db_session.add(
+        ClassificationRule(
+            name="Devoluciones",
+            category_id=branch_category.id,
+            # Sin puntuación: el texto se compara ya normalizado (los signos
+            # de puntuación se eliminan antes de clasificar).
+            pattern="DEV DEB NAC",
+            match_type=MatchType.CONTAINS.value,
+            priority=1,
+            invert_to_negative_payment=True,
+        )
+    )
+    db_session.flush()
+
+    file_path = _write_txt(
+        tmp_path,
+        "extracto_devoluciones.txt",
+        [
+            _row(
+                "20-07-2026",
+                "DEV. DEB NAC 0001 7754798 PAST ROSA DE SARON ACROP",
+                "64.00",
+                "",
+                "1,000.00",
+            ),
+        ],
+    )
+
+    result = import_file(db_session, file_path, bbva_account)
+    assert result.status == ImportedFileStatus.SUCCESS
+
+    movement = db_session.query(Movement).one()
+    assert movement.category_id == branch_category.id
+    assert movement.charge_cents == 0
+    assert movement.payment_cents == -6400
 
 
 def test_reimporting_same_file_raises_duplicate_file_error(tmp_path, db_session, bbva_account):

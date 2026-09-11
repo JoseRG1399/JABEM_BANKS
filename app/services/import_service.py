@@ -32,6 +32,7 @@ from app.services.classification_service import ClassificationEngine
 from app.services.duplicate_service import assign_occurrence_numbers, check_file_duplicate
 from app.services.normalization_service import normalize_movement
 from app.utils.hashes import compute_file_hash
+from app.utils.money import invert_charge_to_negative_payment
 
 
 class DuplicateFileError(Exception):
@@ -105,6 +106,12 @@ def import_file(
         if result.status.value == "UNCLASSIFIED":
             unclassified_count += 1
 
+        charge_cents, payment_cents = nm.charge_cents, nm.payment_cents
+        if result.invert_to_negative_payment:
+            charge_cents, payment_cents = invert_charge_to_negative_payment(
+                charge_cents, payment_cents
+            )
+
         new_movements.append(
             Movement(
                 bank_account_id=bank_account.id,
@@ -116,8 +123,8 @@ def import_file(
                 reference_original=nm.reference_original,
                 normalized_text=nm.normalized_text,
                 external_folio=nm.external_folio,
-                charge_cents=nm.charge_cents,
-                payment_cents=nm.payment_cents,
+                charge_cents=charge_cents,
+                payment_cents=payment_cents,
                 balance_cents=nm.balance_cents,
                 movement_hash=nm.base_movement_hash,
                 occurrence_number=assignment.occurrence_number,

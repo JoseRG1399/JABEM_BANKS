@@ -57,6 +57,7 @@ def _install_exception_hook() -> None:
     sys.excepthook = handle_exception
 
 
+
 def main() -> None:
     config = get_config()
     logger = configure_logging(config.paths.logs_dir)

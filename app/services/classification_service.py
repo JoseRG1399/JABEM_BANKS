@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.constants import ClassificationMethod, ClassificationStatus, IdentifierType, MatchType
 from app.models import BranchIdentifier, ClassificationRule, Movement, MovementClassificationHistory
+from app.utils.money import invert_charge_to_negative_payment
 from app.utils.text import extract_digit_blocks
 
 
@@ -28,6 +29,7 @@ class ClassificationResult:
     category_id: int | None
     branch_id: int | None
     matched_identifier: str | None
+    invert_to_negative_payment: bool = False
 
 
 def _text_matches_rule(normalized_text: str, rule: ClassificationRule) -> bool:
@@ -100,6 +102,7 @@ class ClassificationEngine:
                     category_id=rule.category_id,
                     branch_id=rule.branch_id,
                     matched_identifier=rule.pattern,
+                    invert_to_negative_payment=rule.invert_to_negative_payment,
                 )
 
         identifier = self._match_branch_identifier(normalized_text, bank_account_id)
@@ -195,6 +198,7 @@ class ReclassifyRequest:
     branch_id: int | None = None
     category_id: int | None = None
     note: str | None = None
+    invert_to_negative_payment: bool = False
     create_rule: bool = False
     rule_name: str | None = None
     rule_pattern: str | None = None
@@ -209,6 +213,57 @@ class ReclassifyResult:
     updated_movement_ids: list[int] = field(default_factory=list)
     created_rule_id: int | None = None
     retroactive_count: int = 0
+
+
+def apply_rule_to_matching_movements(
+    session: Session,
+    rule: ClassificationRule,
+    exclude_movement_ids: set[int] | None = None,
+) -> int:
+    """Aplica una regla ya guardada (categoría, sucursal y, si corresponde,
+    la conversión de cargo a abono negativo) a todos los movimientos
+    existentes que coincidan con su patrón. Devuelve cuántos se actualizaron.
+
+    Se usa tanto al crear una regla desde la reclasificación manual como al
+    aplicar retroactivamente una regla creada en la pantalla de Reglas.
+    """
+    query = session.query(Movement)
+    if exclude_movement_ids:
+        query = query.filter(~Movement.id.in_(exclude_movement_ids))
+    if rule.bank_account_id:
+        query = query.filter(Movement.bank_account_id == rule.bank_account_id)
+
+    updated_count = 0
+    for movement in query.all():
+        if not _text_matches_rule(movement.normalized_text, rule):
+            continue
+
+        previous_branch_id = movement.branch_id
+        previous_category_id = movement.category_id
+        movement.branch_id = rule.branch_id
+        movement.category_id = rule.category_id
+        movement.classification_status = ClassificationStatus.CLASSIFIED.value
+        movement.classification_method = ClassificationMethod.SPECIAL_RULE.value
+        movement.matched_identifier = rule.pattern
+        if rule.invert_to_negative_payment:
+            movement.charge_cents, movement.payment_cents = invert_charge_to_negative_payment(
+                movement.charge_cents, movement.payment_cents
+            )
+
+        session.add(
+            MovementClassificationHistory(
+                movement_id=movement.id,
+                previous_branch_id=previous_branch_id,
+                new_branch_id=rule.branch_id,
+                previous_category_id=previous_category_id,
+                new_category_id=rule.category_id,
+                reason="Reclasificación retroactiva por nueva regla.",
+                create_rule=True,
+            )
+        )
+        updated_count += 1
+
+    return updated_count
 
 
 def reclassify_movements(session: Session, request: ReclassifyRequest) -> ReclassifyResult:
@@ -230,6 +285,10 @@ def reclassify_movements(session: Session, request: ReclassifyRequest) -> Reclas
         movement.classification_status = ClassificationStatus.MANUAL.value
         movement.classification_method = ClassificationMethod.MANUAL.value
         movement.matched_identifier = None
+        if request.invert_to_negative_payment:
+            movement.charge_cents, movement.payment_cents = invert_charge_to_negative_payment(
+                movement.charge_cents, movement.payment_cents
+            )
 
         session.add(
             MovementClassificationHistory(
@@ -257,41 +316,15 @@ def reclassify_movements(session: Session, request: ReclassifyRequest) -> Reclas
             match_type=request.rule_match_type,
             priority=request.rule_priority,
             case_sensitive=request.rule_case_sensitive,
+            invert_to_negative_payment=request.invert_to_negative_payment,
         )
         session.add(rule)
         session.flush()
         created_rule_id = rule.id
 
-        query = session.query(Movement)
-        if updated_ids:
-            query = query.filter(~Movement.id.in_(updated_ids))
-        if request.rule_bank_account_id:
-            query = query.filter(Movement.bank_account_id == request.rule_bank_account_id)
-
-        for movement in query.all():
-            if not _text_matches_rule(movement.normalized_text, rule):
-                continue
-
-            previous_branch_id = movement.branch_id
-            previous_category_id = movement.category_id
-            movement.branch_id = request.branch_id
-            movement.category_id = request.category_id
-            movement.classification_status = ClassificationStatus.CLASSIFIED.value
-            movement.classification_method = ClassificationMethod.SPECIAL_RULE.value
-            movement.matched_identifier = rule.pattern
-
-            session.add(
-                MovementClassificationHistory(
-                    movement_id=movement.id,
-                    previous_branch_id=previous_branch_id,
-                    new_branch_id=request.branch_id,
-                    previous_category_id=previous_category_id,
-                    new_category_id=request.category_id,
-                    reason="Reclasificación retroactiva por nueva regla.",
-                    create_rule=True,
-                )
-            )
-            retroactive_count += 1
+        retroactive_count = apply_rule_to_matching_movements(
+            session, rule, exclude_movement_ids=set(updated_ids)
+        )
 
     session.flush()
 

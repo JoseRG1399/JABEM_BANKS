@@ -84,6 +84,14 @@ class ClassifyMovementDialog(QDialog):
         form.addRow("Nota:", self._note_edit)
         layout.addLayout(form)
 
+        self._invert_checkbox = QCheckBox("Convertir el cargo en abono negativo")
+        self._invert_checkbox.setToolTip(
+            "Para movimientos como devoluciones ('Dev. deb nac...') que llegan como "
+            "cargo pero deben descontarse del total de abonos: el cargo pasa a 0 y el "
+            "abono queda en negativo por el mismo importe."
+        )
+        layout.addWidget(self._invert_checkbox)
+
         self._create_rule_checkbox = QCheckBox("Crear una regla para futuros movimientos")
         self._create_rule_checkbox.toggled.connect(self._on_toggle_create_rule)
         layout.addWidget(self._create_rule_checkbox)
@@ -236,6 +244,7 @@ class ClassifyMovementDialog(QDialog):
             branch_id=self._branch_combo.currentData(),
             category_id=self._category_combo.currentData(),
             note=self._note_edit.text().strip() or None,
+            invert_to_negative_payment=self._invert_checkbox.isChecked(),
             create_rule=create_rule,
             rule_name=self._rule_name_edit.text().strip() or None,
             rule_pattern=rule_pattern or None,

@@ -59,6 +59,20 @@ def cents_to_decimal(cents: int) -> Decimal:
     return Decimal(cents) / Decimal(100)
 
 
+def invert_charge_to_negative_payment(charge_cents: int, payment_cents: int) -> tuple[int, int]:
+    """Convierte un cargo en un abono negativo neto (para movimientos como
+    "Dev. deb nac ..." que en realidad son devoluciones y deben descontarse
+    del total de abonos en vez de sumarse a los cargos).
+
+    Devuelve ``(charge_cents, payment_cents)`` ya ajustados: el cargo pasa a
+    cero y el abono absorbe la diferencia (``payment_cents - charge_cents``).
+    Si no hay cargo, los valores se devuelven sin cambios.
+    """
+    if not charge_cents:
+        return charge_cents, payment_cents
+    return 0, payment_cents - charge_cents
+
+
 def format_currency(cents: int, currency_symbol: str = "$") -> str:
     """Formatea centavos como moneda legible: 395300 -> '$3,953.00'."""
     value = cents_to_decimal(cents)

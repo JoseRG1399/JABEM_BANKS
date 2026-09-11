@@ -17,7 +17,17 @@ from app.database.session import Database
 from app.repositories.rule_repository import RuleRepository
 from app.ui.dialogs.rule_dialog import RuleDialog
 
-COLUMNS = ["Nombre", "Patrón", "Tipo", "Banco / Cuenta", "Categoría", "Sucursal", "Prioridad", "Estado"]
+COLUMNS = [
+    "Nombre",
+    "Patrón",
+    "Tipo",
+    "Banco / Cuenta",
+    "Categoría",
+    "Sucursal",
+    "Prioridad",
+    "Abono negativo",
+    "Estado",
+]
 
 MATCH_TYPE_LABELS = {
     MatchType.CONTAINS.value: "Contiene",
@@ -91,6 +101,7 @@ class RulesPage(QWidget):
                     category_label,
                     branch_label,
                     str(rule.priority),
+                    "Sí" if rule.invert_to_negative_payment else "—",
                     "Activa" if rule.active else "Inactiva",
                 ]
                 for col_index, value in enumerate(values):

@@ -24,7 +24,11 @@ from app.repositories.bank_repository import BankRepository
 from app.repositories.branch_repository import BranchRepository
 from app.repositories.category_repository import CategoryRepository
 from app.repositories.rule_repository import RuleRepository
-from app.services.classification_service import count_matching_movements, rule_matches_text
+from app.services.classification_service import (
+    apply_rule_to_matching_movements,
+    count_matching_movements,
+    rule_matches_text,
+)
 from app.utils.text import normalize_text
 
 MATCH_TYPE_LABELS = [
@@ -87,6 +91,14 @@ class RuleDialog(QDialog):
         self._active_checkbox.setChecked(True)
         form.addRow("", self._active_checkbox)
 
+        self._invert_checkbox = QCheckBox("Convertir el cargo en abono negativo")
+        self._invert_checkbox.setToolTip(
+            "Para movimientos como devoluciones ('Dev. deb nac...') que llegan como "
+            "cargo pero deben descontarse del total de abonos: el cargo pasa a 0 y el "
+            "abono queda en negativo por el mismo importe."
+        )
+        form.addRow("", self._invert_checkbox)
+
         layout.addLayout(form)
 
         layout.addWidget(QLabel("Probar regla"))
@@ -104,6 +116,11 @@ class RuleDialog(QDialog):
         count_button.clicked.connect(self._on_count_matches)
         count_row.addWidget(count_button)
         layout.addLayout(count_row)
+
+        self._apply_retroactively_checkbox = QCheckBox(
+            "Al guardar, aplicar también a los movimientos existentes que coincidan"
+        )
+        layout.addWidget(self._apply_retroactively_checkbox)
 
         self._test_result_label = QLabel("")
         self._test_result_label.setWordWrap(True)
@@ -162,6 +179,7 @@ class RuleDialog(QDialog):
 
             self._priority_spin.setValue(rule.priority)
             self._active_checkbox.setChecked(rule.active)
+            self._invert_checkbox.setChecked(rule.invert_to_negative_payment)
 
     # ------------------------------------------------------------------
     def _on_test_pattern(self) -> None:
@@ -220,6 +238,9 @@ class RuleDialog(QDialog):
             QMessageBox.warning(self, "Categoría requerida", "Selecciona una categoría.")
             return
 
+        apply_retroactively = self._apply_retroactively_checkbox.isChecked()
+        retroactive_count = 0
+
         with self._database.session_scope() as session:
             rule_repo = RuleRepository(session)
 
@@ -234,6 +255,7 @@ class RuleDialog(QDialog):
                     priority=self._priority_spin.value(),
                     case_sensitive=self._case_sensitive_checkbox.isChecked(),
                     active=self._active_checkbox.isChecked(),
+                    invert_to_negative_payment=self._invert_checkbox.isChecked(),
                 )
                 rule_repo.add(rule)
             else:
@@ -249,5 +271,17 @@ class RuleDialog(QDialog):
                 rule.priority = self._priority_spin.value()
                 rule.case_sensitive = self._case_sensitive_checkbox.isChecked()
                 rule.active = self._active_checkbox.isChecked()
+                rule.invert_to_negative_payment = self._invert_checkbox.isChecked()
 
+            if apply_retroactively:
+                session.flush()
+                retroactive_count = apply_rule_to_matching_movements(session, rule)
+
+        if apply_retroactively:
+            QMessageBox.information(
+                self,
+                "Regla aplicada",
+                f"Se actualizaron {retroactive_count} movimiento(s) existentes que "
+                "coinciden con esta regla.",
+            )
         self.accept()

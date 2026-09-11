@@ -7,6 +7,7 @@ from app.database.seed import seed_catalogs
 from app.models import (
     BankAccount,
     Branch,
+    ClassificationRule,
     ImportedFile,
     Movement,
     MovementCategory,
@@ -14,6 +15,7 @@ from app.models import (
 )
 from app.services.classification_service import (
     ReclassifyRequest,
+    apply_rule_to_matching_movements,
     count_matching_movements,
     identifier_matches_text,
     reclassify_movements,
@@ -172,3 +174,82 @@ def test_reclassify_with_rule_applies_retroactively(db_session, catalogs):
         db_session.query(MovementClassificationHistory).filter_by(movement_id=m2.id).one()
     )
     assert history_for_m2.create_rule is True
+
+
+def test_reclassify_inverts_charge_to_negative_payment_for_selected_movements(db_session, catalogs):
+    # m3 llega como cargo (charge_cents=1000, payment_cents=0), pero es una
+    # devolución que debe descontarse del abono en vez de sumarse al cargo.
+    request = ReclassifyRequest(
+        movement_ids=[catalogs["m3"].id],
+        branch_id=None,
+        category_id=catalogs["unclassified_category"].id,
+        invert_to_negative_payment=True,
+        create_rule=False,
+    )
+    reclassify_movements(db_session, request)
+
+    updated = db_session.get(Movement, catalogs["m3"].id)
+    assert updated.charge_cents == 0
+    assert updated.payment_cents == -1000
+
+    # Los no seleccionados no se tocan.
+    untouched = db_session.get(Movement, catalogs["m1"].id)
+    assert untouched.charge_cents == 1000
+    assert untouched.payment_cents == 0
+
+
+def test_reclassify_with_rule_inverts_retroactive_matches_too(db_session, catalogs):
+    request = ReclassifyRequest(
+        movement_ids=[catalogs["m1"].id],
+        branch_id=None,
+        category_id=catalogs["unclassified_category"].id,
+        invert_to_negative_payment=True,
+        create_rule=True,
+        rule_name="Uber",
+        rule_pattern="UBER",
+        rule_match_type=MatchType.CONTAINS.value,
+        rule_case_sensitive=False,
+        rule_bank_account_id=catalogs["bbva"].id,
+        rule_priority=10,
+    )
+    result = reclassify_movements(db_session, request)
+    assert result.retroactive_count == 1
+
+    m1 = db_session.get(Movement, catalogs["m1"].id)
+    m2 = db_session.get(Movement, catalogs["m2"].id)
+    for movement in (m1, m2):
+        assert movement.charge_cents == 0
+        assert movement.payment_cents == -1000
+
+    created_rule = db_session.get(ClassificationRule, result.created_rule_id)
+    assert created_rule.invert_to_negative_payment is True
+
+    # m3 no coincide con el patrón y conserva su cargo original.
+    m3 = db_session.get(Movement, catalogs["m3"].id)
+    assert m3.charge_cents == 1000
+    assert m3.payment_cents == 0
+
+
+def test_apply_rule_to_matching_movements_inverts_and_skips_excluded(db_session, catalogs):
+    rule = ClassificationRule(
+        name="Uber",
+        category_id=catalogs["unclassified_category"].id,
+        pattern="UBER",
+        match_type=MatchType.CONTAINS.value,
+        priority=10,
+        invert_to_negative_payment=True,
+    )
+    db_session.add(rule)
+    db_session.flush()
+
+    updated_count = apply_rule_to_matching_movements(
+        db_session, rule, exclude_movement_ids={catalogs["m1"].id}
+    )
+    # Solo m2 coincide con "UBER" y no fue excluido.
+    assert updated_count == 1
+
+    m1 = db_session.get(Movement, catalogs["m1"].id)
+    m2 = db_session.get(Movement, catalogs["m2"].id)
+    assert m1.charge_cents == 1000  # excluido explícitamente, sin cambios
+    assert m2.charge_cents == 0
+    assert m2.payment_cents == -1000
