@@ -26,6 +26,7 @@ COLUMNS = [
     "Sucursal",
     "Prioridad",
     "Abono negativo",
+    "Divide IVA",
     "Estado",
 ]
 
@@ -102,6 +103,7 @@ class RulesPage(QWidget):
                     branch_label,
                     str(rule.priority),
                     "Sí" if rule.invert_to_negative_payment else "—",
+                    "Sí" if rule.split_vat_from_charge else "—",
                     "Activa" if rule.active else "Inactiva",
                 ]
                 for col_index, value in enumerate(values):

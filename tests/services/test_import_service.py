@@ -123,6 +123,99 @@ def test_rule_with_invert_flag_turns_charge_into_negative_payment_on_import(
     assert movement.payment_cents == -6400
 
 
+def test_rule_with_split_flag_creates_base_and_vat_movements_on_import(
+    tmp_path, db_session, bbva_account
+):
+    unclassified_category = (
+        db_session.query(MovementCategory).filter_by(code=CategoryCode.UNCLASSIFIED.value).one()
+    )
+    vat_category = (
+        db_session.query(MovementCategory)
+        .filter_by(code=CategoryCode.DIRECT_DEBIT_VAT.value)
+        .one()
+    )
+    db_session.add(
+        ClassificationRule(
+            name="Domiciliaciones",
+            category_id=unclassified_category.id,
+            pattern="DOMIC",
+            match_type=MatchType.CONTAINS.value,
+            priority=1,
+            split_vat_from_charge=True,
+        )
+    )
+    db_session.flush()
+
+    file_path = _write_txt(
+        tmp_path,
+        "extracto_domiciliacion.txt",
+        [_row("07-09-2026", "DOMIC/6066887", "68.44", "", "154,986.88")],
+    )
+
+    result = import_file(db_session, file_path, bbva_account)
+    assert result.status == ImportedFileStatus.SUCCESS
+    # Una sola fila en el archivo, pero se insertan dos movimientos.
+    assert result.inserted_rows == 2
+
+    movements = db_session.query(Movement).order_by(Movement.charge_cents.desc()).all()
+    assert len(movements) == 2
+    base, vat = movements
+
+    assert base.charge_cents == 5900
+    assert base.category_id == unclassified_category.id
+    assert base.split_from_movement_id is None
+
+    assert vat.charge_cents == 944
+    assert vat.description_original == "IVA DOMIC/6066887"
+    assert vat.category_id == vat_category.id
+    assert vat.split_from_movement_id == base.id
+
+
+def test_reimporting_file_with_split_movement_does_not_duplicate(
+    tmp_path, db_session, bbva_account
+):
+    unclassified_category = (
+        db_session.query(MovementCategory).filter_by(code=CategoryCode.UNCLASSIFIED.value).one()
+    )
+    db_session.add(
+        ClassificationRule(
+            name="Domiciliaciones",
+            category_id=unclassified_category.id,
+            pattern="DOMIC",
+            match_type=MatchType.CONTAINS.value,
+            priority=1,
+            split_vat_from_charge=True,
+        )
+    )
+    db_session.flush()
+
+    file_a = _write_txt(
+        tmp_path,
+        "extracto_domiciliacion_a.txt",
+        [_row("07-09-2026", "DOMIC/6066887", "68.44", "", "154,986.88")],
+    )
+    result_a = import_file(db_session, file_a, bbva_account)
+    assert result_a.inserted_rows == 2
+
+    # Un segundo archivo (distinto, como un extracto reexportado con rango
+    # de fechas superpuesto) que trae la misma domiciliación: debe
+    # reconocerse como duplicado en sus dos mitades, no reinsertarse.
+    file_b = _write_txt(
+        tmp_path,
+        "extracto_domiciliacion_b.txt",
+        [
+            _row("07-09-2026", "DOMIC/6066887", "68.44", "", "154,986.88"),
+            _row("08-09-2026", "OTRO MOVIMIENTO", "10.00", "", "154,976.88"),
+        ],
+    )
+    result_b = import_file(db_session, file_b, bbva_account)
+
+    assert result_b.inserted_rows == 1  # solo "OTRO MOVIMIENTO"
+    assert result_b.duplicate_rows == 2  # base + IVA de la domiciliación
+
+    assert db_session.query(Movement).count() == 3
+
+
 def test_reimporting_same_file_raises_duplicate_file_error(tmp_path, db_session, bbva_account):
     file_path = _write_txt(
         tmp_path,

@@ -59,6 +59,32 @@ def cents_to_decimal(cents: int) -> Decimal:
     return Decimal(cents) / Decimal(100)
 
 
+DIRECT_DEBIT_VAT_RATE = Decimal("0.16")
+
+
+def split_charge_into_base_and_vat(total_cents: int) -> tuple[int, int]:
+    """Separa un cargo que ya incluye IVA (16%) en su base y su IVA.
+
+    Se usa para domiciliaciones que el banco reporta como un solo cargo que
+    en realidad junta un importe base y su IVA (p. ej. $68.44 = $59.00 de
+    base + $9.44 de IVA).
+
+    Devuelve ``(base_cents, vat_cents)``. El IVA se calcula como el residuo
+    (``total_cents - base_cents``) en vez de redondear ambos por separado,
+    para garantizar que ``base_cents + vat_cents == total_cents`` siempre,
+    sin perder ni agregar centavos por redondeo.
+    """
+    if not total_cents:
+        return 0, 0
+    base_cents = int(
+        (Decimal(total_cents) / (Decimal("1") + DIRECT_DEBIT_VAT_RATE)).to_integral_value(
+            rounding="ROUND_HALF_UP"
+        )
+    )
+    vat_cents = total_cents - base_cents
+    return base_cents, vat_cents
+
+
 def invert_charge_to_negative_payment(charge_cents: int, payment_cents: int) -> tuple[int, int]:
     """Convierte un cargo en un abono negativo neto (para movimientos como
     "Dev. deb nac ..." que en realidad son devoluciones y deben descontarse

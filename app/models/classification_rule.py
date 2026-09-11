@@ -36,6 +36,9 @@ class ClassificationRule(TimestampMixin, Base):
     invert_to_negative_payment: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False
     )
+    split_vat_from_charge: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
 
     category: Mapped["MovementCategory"] = relationship()
     bank_account: Mapped["BankAccount | None"] = relationship()

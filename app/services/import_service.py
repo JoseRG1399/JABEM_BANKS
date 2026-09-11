@@ -18,7 +18,7 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session
 
-from app.constants import ImportedFileStatus
+from app.constants import ClassificationMethod, ClassificationStatus, ImportedFileStatus
 from app.models import BankAccount, ImportedFile, Movement
 from app.parsers.parser_factory import get_parser_for_bank
 from app.repositories.branch_repository import BranchRepository
@@ -28,9 +28,13 @@ from app.repositories.movement_repository import MovementRepository
 from app.repositories.rule_repository import RuleRepository
 from app.schemas.import_result import ImportResult
 from app.schemas.parsed_movement import ParseOutcome
-from app.services.classification_service import ClassificationEngine
+from app.services.classification_service import (
+    ClassificationEngine,
+    ClassificationResult,
+    get_direct_debit_vat_category_id,
+)
 from app.services.duplicate_service import assign_occurrence_numbers, check_file_duplicate
-from app.services.normalization_service import normalize_movement
+from app.services.normalization_service import NormalizedMovement, build_vat_split, normalize_movement
 from app.utils.hashes import compute_file_hash
 from app.utils.money import invert_charge_to_negative_payment
 
@@ -88,21 +92,61 @@ def import_file(
     normalized_movements = [
         normalize_movement(row, bank_account.id) for row in parse_outcome.rows
     ]
-    assignments = assign_occurrence_numbers(movement_repo, normalized_movements)
 
     engine = _build_classification_engine(session, rule_repo, branch_repo)
+
+    # Clasifica antes de calcular duplicados: una regla puede pedir que un
+    # movimiento se separe en dos (cargo base + IVA, p. ej. una
+    # domiciliación), y cada mitad debe pasar por la detección de
+    # duplicados con su propio hash, no con el de la fila original.
+    expanded_movements: list[NormalizedMovement] = []
+    classifications: list[ClassificationResult] = []
+    # True en la posición de un movimiento de IVA generado por una división,
+    # para enlazarlo (``split_from_movement``) con el movimiento base que se
+    # acaba de construir justo antes que él.
+    links_to_previous: list[bool] = []
+    vat_category_id: int | None = None
+
+    for nm in normalized_movements:
+        result = engine.classify(nm.normalized_text, bank_account.id)
+
+        if result.split_vat_from_charge and nm.charge_cents:
+            if vat_category_id is None:
+                vat_category_id = get_direct_debit_vat_category_id(session)
+            base_nm, vat_nm = build_vat_split(nm, bank_account.id)
+            expanded_movements.append(base_nm)
+            classifications.append(result)
+            links_to_previous.append(False)
+            expanded_movements.append(vat_nm)
+            classifications.append(
+                ClassificationResult(
+                    status=ClassificationStatus.CLASSIFIED,
+                    method=ClassificationMethod.SPECIAL_RULE,
+                    category_id=vat_category_id,
+                    branch_id=result.branch_id,
+                    matched_identifier=result.matched_identifier,
+                )
+            )
+            links_to_previous.append(True)
+        else:
+            expanded_movements.append(nm)
+            classifications.append(result)
+            links_to_previous.append(False)
+
+    assignments = assign_occurrence_numbers(movement_repo, expanded_movements)
 
     new_movements: list[Movement] = []
     duplicate_count = 0
     unclassified_count = 0
+    previous_movement: Movement | None = None
 
-    for assignment in assignments:
+    for assignment, result, links_to_prev in zip(assignments, classifications, links_to_previous):
         if not assignment.is_new:
             duplicate_count += 1
+            previous_movement = None
             continue
 
         nm = assignment.normalized
-        result = engine.classify(nm.normalized_text, bank_account.id)
         if result.status.value == "UNCLASSIFIED":
             unclassified_count += 1
 
@@ -112,28 +156,29 @@ def import_file(
                 charge_cents, payment_cents
             )
 
-        new_movements.append(
-            Movement(
-                bank_account_id=bank_account.id,
-                branch_id=result.branch_id,
-                category_id=result.category_id,
-                imported_file_id=imported_file.id,
-                movement_date=nm.movement_date,
-                description_original=nm.description_original,
-                reference_original=nm.reference_original,
-                normalized_text=nm.normalized_text,
-                external_folio=nm.external_folio,
-                charge_cents=charge_cents,
-                payment_cents=payment_cents,
-                balance_cents=nm.balance_cents,
-                movement_hash=nm.base_movement_hash,
-                occurrence_number=assignment.occurrence_number,
-                classification_status=result.status.value,
-                classification_method=result.method.value,
-                matched_identifier=result.matched_identifier,
-                source_row_number=nm.row_number,
-            )
+        movement = Movement(
+            bank_account_id=bank_account.id,
+            branch_id=result.branch_id,
+            category_id=result.category_id,
+            imported_file_id=imported_file.id,
+            movement_date=nm.movement_date,
+            description_original=nm.description_original,
+            reference_original=nm.reference_original,
+            normalized_text=nm.normalized_text,
+            external_folio=nm.external_folio,
+            charge_cents=charge_cents,
+            payment_cents=payment_cents,
+            balance_cents=nm.balance_cents,
+            movement_hash=nm.base_movement_hash,
+            occurrence_number=assignment.occurrence_number,
+            classification_status=result.status.value,
+            classification_method=result.method.value,
+            matched_identifier=result.matched_identifier,
+            source_row_number=nm.row_number,
+            split_from_movement=previous_movement if links_to_prev else None,
         )
+        new_movements.append(movement)
+        previous_movement = movement
 
     movement_repo.add_all(new_movements)
 

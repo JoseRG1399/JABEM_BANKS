@@ -57,6 +57,7 @@ class CategoryCode(str, enum.Enum):
     ERRONEOUS_TRANSFER = "ERRONEOUS_TRANSFER"
     VAT_REFUND = "VAT_REFUND"
     CARD_EXPENSES = "CARD_EXPENSES"
+    DIRECT_DEBIT_VAT = "DIRECT_DEBIT_VAT"
     UNCLASSIFIED = "UNCLASSIFIED"
 
 
@@ -70,5 +71,6 @@ CATEGORY_DISPLAY_NAMES: dict[str, str] = {
     CategoryCode.ERRONEOUS_TRANSFER: "Transferencia errónea",
     CategoryCode.VAT_REFUND: "Devolución de IVA",
     CategoryCode.CARD_EXPENSES: "Gastos tarjeta débito",
+    CategoryCode.DIRECT_DEBIT_VAT: "IVA domiciliación",
     CategoryCode.UNCLASSIFIED: "No clasificado",
 }

@@ -99,6 +99,15 @@ class RuleDialog(QDialog):
         )
         form.addRow("", self._invert_checkbox)
 
+        self._split_vat_checkbox = QCheckBox("Dividir el cargo en base + IVA (16%)")
+        self._split_vat_checkbox.setToolTip(
+            "Para domiciliaciones que llegan como un solo cargo que ya incluye su IVA "
+            "(p. ej. Domic/...): se generan dos movimientos, uno con el importe base "
+            "(con la categoría de arriba) y otro con el IVA (categoría 'IVA "
+            "domiciliación'), sumando exactamente el cargo original."
+        )
+        form.addRow("", self._split_vat_checkbox)
+
         layout.addLayout(form)
 
         layout.addWidget(QLabel("Probar regla"))
@@ -180,6 +189,7 @@ class RuleDialog(QDialog):
             self._priority_spin.setValue(rule.priority)
             self._active_checkbox.setChecked(rule.active)
             self._invert_checkbox.setChecked(rule.invert_to_negative_payment)
+            self._split_vat_checkbox.setChecked(rule.split_vat_from_charge)
 
     # ------------------------------------------------------------------
     def _on_test_pattern(self) -> None:
@@ -256,6 +266,7 @@ class RuleDialog(QDialog):
                     case_sensitive=self._case_sensitive_checkbox.isChecked(),
                     active=self._active_checkbox.isChecked(),
                     invert_to_negative_payment=self._invert_checkbox.isChecked(),
+                    split_vat_from_charge=self._split_vat_checkbox.isChecked(),
                 )
                 rule_repo.add(rule)
             else:
@@ -272,6 +283,7 @@ class RuleDialog(QDialog):
                 rule.case_sensitive = self._case_sensitive_checkbox.isChecked()
                 rule.active = self._active_checkbox.isChecked()
                 rule.invert_to_negative_payment = self._invert_checkbox.isChecked()
+                rule.split_vat_from_charge = self._split_vat_checkbox.isChecked()
 
             if apply_retroactively:
                 session.flush()

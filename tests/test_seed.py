@@ -11,14 +11,14 @@ def test_seed_catalogs_creates_expected_records(db_session):
     assert result.accounts_created == 3
     assert result.branches_created == 21
     assert result.identifiers_created == 21
-    assert result.categories_created == 10
+    assert result.categories_created == 11
     assert result.rules_created == 8
 
     assert db_session.query(Bank).count() == 2
     assert db_session.query(BankAccount).count() == 3
     assert db_session.query(Branch).count() == 21
     assert db_session.query(BranchIdentifier).count() == 21
-    assert db_session.query(MovementCategory).count() == 10
+    assert db_session.query(MovementCategory).count() == 11
     assert db_session.query(ClassificationRule).count() == 8
 
 
@@ -31,7 +31,7 @@ def test_seed_catalogs_is_idempotent(db_session):
     assert db_session.query(BankAccount).count() == 3
     assert db_session.query(Branch).count() == 21
     assert db_session.query(BranchIdentifier).count() == 21
-    assert db_session.query(MovementCategory).count() == 10
+    assert db_session.query(MovementCategory).count() == 11
     assert db_session.query(ClassificationRule).count() == 8
 
 

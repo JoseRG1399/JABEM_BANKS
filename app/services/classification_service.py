@@ -16,10 +16,17 @@ from dataclasses import dataclass, field
 
 from sqlalchemy.orm import Session
 
-from app.constants import ClassificationMethod, ClassificationStatus, IdentifierType, MatchType
-from app.models import BranchIdentifier, ClassificationRule, Movement, MovementClassificationHistory
-from app.utils.money import invert_charge_to_negative_payment
-from app.utils.text import extract_digit_blocks
+from app.constants import CategoryCode, ClassificationMethod, ClassificationStatus, IdentifierType, MatchType
+from app.models import (
+    BranchIdentifier,
+    ClassificationRule,
+    Movement,
+    MovementCategory,
+    MovementClassificationHistory,
+)
+from app.utils.hashes import compute_movement_hash
+from app.utils.money import invert_charge_to_negative_payment, split_charge_into_base_and_vat
+from app.utils.text import extract_digit_blocks, normalize_text
 
 
 @dataclass
@@ -30,6 +37,7 @@ class ClassificationResult:
     branch_id: int | None
     matched_identifier: str | None
     invert_to_negative_payment: bool = False
+    split_vat_from_charge: bool = False
 
 
 def _text_matches_rule(normalized_text: str, rule: ClassificationRule) -> bool:
@@ -103,6 +111,7 @@ class ClassificationEngine:
                     branch_id=rule.branch_id,
                     matched_identifier=rule.pattern,
                     invert_to_negative_payment=rule.invert_to_negative_payment,
+                    split_vat_from_charge=rule.split_vat_from_charge,
                 )
 
         identifier = self._match_branch_identifier(normalized_text, bank_account_id)
@@ -199,6 +208,7 @@ class ReclassifyRequest:
     category_id: int | None = None
     note: str | None = None
     invert_to_negative_payment: bool = False
+    split_vat_from_charge: bool = False
     create_rule: bool = False
     rule_name: str | None = None
     rule_pattern: str | None = None
@@ -215,14 +225,125 @@ class ReclassifyResult:
     retroactive_count: int = 0
 
 
+def get_direct_debit_vat_category_id(session: Session) -> int:
+    category = (
+        session.query(MovementCategory)
+        .filter_by(code=CategoryCode.DIRECT_DEBIT_VAT.value)
+        .one_or_none()
+    )
+    if category is None:
+        raise RuntimeError(
+            "La categoría 'IVA domiciliación' no está cargada. Ejecuta seed_catalogs primero."
+        )
+    return category.id
+
+
+def _split_movement_into_base_and_vat(
+    session: Session,
+    movement: Movement,
+    *,
+    branch_id: int | None,
+    category_id: int | None,
+    vat_category_id: int,
+    matched_identifier: str | None,
+    classification_status: str,
+    classification_method: str,
+    reason: str,
+) -> Movement | None:
+    """Convierte ``movement`` en la parte "base" de un cargo con IVA (p. ej.
+    una domiciliación) y crea un segundo movimiento con la parte de IVA,
+    enlazado mediante ``split_from_movement``. No hace nada si el movimiento
+    no tiene cargo que dividir.
+
+    El IVA se calcula con :func:`split_charge_into_base_and_vat` (16% ya
+    incluido en el total). El hash del movimiento de IVA se deriva de su
+    propia descripción e importe, así que un archivo reimportado lo
+    reconoce como duplicado igual que a cualquier otro movimiento.
+    """
+    if not movement.charge_cents:
+        return None
+
+    base_cents, vat_cents = split_charge_into_base_and_vat(movement.charge_cents)
+
+    previous_branch_id = movement.branch_id
+    previous_category_id = movement.category_id
+
+    movement.charge_cents = base_cents
+    movement.branch_id = branch_id
+    movement.category_id = category_id
+    movement.classification_status = classification_status
+    movement.classification_method = classification_method
+    movement.matched_identifier = matched_identifier
+
+    vat_description = f"IVA {movement.description_original}"
+    vat_normalized_text = normalize_text(vat_description)
+    vat_normalized_reference = (
+        normalize_text(movement.reference_original) if movement.reference_original else ""
+    )
+    vat_hash = compute_movement_hash(
+        bank_account_id=movement.bank_account_id,
+        movement_date=movement.movement_date,
+        normalized_concept=vat_normalized_text,
+        normalized_reference=vat_normalized_reference,
+        external_folio=movement.external_folio or "",
+        charge_cents=vat_cents,
+        payment_cents=0,
+        balance_cents=movement.balance_cents,
+    )
+    # Numera la aparición por si, en un caso extremo, ya existiera otro
+    # movimiento con el mismo hash (misma cuenta/fecha/concepto/importe).
+    existing_with_hash = session.query(Movement).filter_by(movement_hash=vat_hash).count()
+
+    vat_movement = Movement(
+        bank_account_id=movement.bank_account_id,
+        branch_id=branch_id,
+        category_id=vat_category_id,
+        imported_file_id=movement.imported_file_id,
+        movement_date=movement.movement_date,
+        description_original=vat_description,
+        reference_original=movement.reference_original,
+        normalized_text=vat_normalized_text,
+        external_folio=movement.external_folio,
+        charge_cents=vat_cents,
+        payment_cents=0,
+        balance_cents=movement.balance_cents,
+        movement_hash=vat_hash,
+        occurrence_number=existing_with_hash + 1,
+        classification_status=classification_status,
+        classification_method=classification_method,
+        matched_identifier=matched_identifier,
+        source_row_number=movement.source_row_number,
+        split_from_movement=movement,
+    )
+    session.add(vat_movement)
+
+    session.add(
+        MovementClassificationHistory(
+            movement_id=movement.id,
+            previous_branch_id=previous_branch_id,
+            new_branch_id=branch_id,
+            previous_category_id=previous_category_id,
+            new_category_id=category_id,
+            reason=reason,
+            create_rule=True,
+        )
+    )
+    # Sin este flush, una segunda llamada dentro de la misma sesión (sin un
+    # commit de por medio) no vería el movimiento de IVA recién creado al
+    # comprobar si algo ya se dividió, y lo volvería a partir.
+    session.flush()
+    return vat_movement
+
+
 def apply_rule_to_matching_movements(
     session: Session,
     rule: ClassificationRule,
     exclude_movement_ids: set[int] | None = None,
 ) -> int:
     """Aplica una regla ya guardada (categoría, sucursal y, si corresponde,
-    la conversión de cargo a abono negativo) a todos los movimientos
-    existentes que coincidan con su patrón. Devuelve cuántos se actualizaron.
+    la conversión de cargo a abono negativo o la división de cargo con IVA)
+    a todos los movimientos existentes que coincidan con su patrón. Devuelve
+    cuántos se actualizaron.
 
     Se usa tanto al crear una regla desde la reclasificación manual como al
     aplicar retroactivamente una regla creada en la pantalla de Reglas.
@@ -233,9 +354,39 @@ def apply_rule_to_matching_movements(
     if rule.bank_account_id:
         query = query.filter(Movement.bank_account_id == rule.bank_account_id)
 
+    vat_category_id: int | None = None
     updated_count = 0
     for movement in query.all():
         if not _text_matches_rule(movement.normalized_text, rule):
+            continue
+
+        if rule.split_vat_from_charge:
+            # Ni un movimiento ya dividido (es el IVA de otro) ni uno que ya
+            # tiene su contraparte de IVA se vuelven a partir.
+            if movement.split_from_movement_id is not None:
+                continue
+            already_split = (
+                session.query(Movement.id)
+                .filter_by(split_from_movement_id=movement.id)
+                .first()
+                is not None
+            )
+            if already_split or not movement.charge_cents:
+                continue
+            if vat_category_id is None:
+                vat_category_id = get_direct_debit_vat_category_id(session)
+            _split_movement_into_base_and_vat(
+                session,
+                movement,
+                branch_id=rule.branch_id,
+                category_id=rule.category_id,
+                vat_category_id=vat_category_id,
+                matched_identifier=rule.pattern,
+                classification_status=ClassificationStatus.CLASSIFIED.value,
+                classification_method=ClassificationMethod.SPECIAL_RULE.value,
+                reason="Reclasificación retroactiva por nueva regla (división de IVA).",
+            )
+            updated_count += 1
             continue
 
         previous_branch_id = movement.branch_id
@@ -272,9 +423,31 @@ def reclassify_movements(session: Session, request: ReclassifyRequest) -> Reclas
     movimientos existentes que coincidan con ella.
     """
     updated_ids: list[int] = []
+    vat_category_id: int | None = None
     for movement_id in request.movement_ids:
         movement = session.get(Movement, movement_id)
         if movement is None:
+            continue
+
+        if (
+            request.split_vat_from_charge
+            and movement.charge_cents
+            and movement.split_from_movement_id is None
+        ):
+            if vat_category_id is None:
+                vat_category_id = get_direct_debit_vat_category_id(session)
+            _split_movement_into_base_and_vat(
+                session,
+                movement,
+                branch_id=request.branch_id,
+                category_id=request.category_id,
+                vat_category_id=vat_category_id,
+                matched_identifier=None,
+                classification_status=ClassificationStatus.MANUAL.value,
+                classification_method=ClassificationMethod.MANUAL.value,
+                reason=request.note or "División manual de cargo con IVA.",
+            )
+            updated_ids.append(movement.id)
             continue
 
         previous_branch_id = movement.branch_id
@@ -317,6 +490,7 @@ def reclassify_movements(session: Session, request: ReclassifyRequest) -> Reclas
             priority=request.rule_priority,
             case_sensitive=request.rule_case_sensitive,
             invert_to_negative_payment=request.invert_to_negative_payment,
+            split_vat_from_charge=request.split_vat_from_charge,
         )
         session.add(rule)
         session.flush()
