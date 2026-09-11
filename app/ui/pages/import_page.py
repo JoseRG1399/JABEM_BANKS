@@ -1,4 +1,4 @@
-"""Pantalla de importación de archivos bancarios (BBVA TXT, Mifel CSV).
+"""Pantalla de importación de archivos bancarios (BBVA TXT/XLSX, Mifel CSV).
 
 La importación real corre en un ``QThread`` (``ImportWorker``) para no
 congelar la interfaz; ningún widget se toca desde el hilo de trabajo, solo
@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import openpyxl
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QDragEnterEvent, QDropEvent, QFont
 from PySide6.QtWidgets import (
@@ -44,7 +45,7 @@ class _DropArea(QFrame):
 
         layout = QVBoxLayout(self)
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._label = QLabel("Arrastra un archivo TXT o CSV aquí, o usa el botón de abajo.")
+        self._label = QLabel("Arrastra un archivo TXT, CSV o XLSX aquí, o usa el botón de abajo.")
         self._label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._label.setWordWrap(True)
         layout.addWidget(self._label)
@@ -165,7 +166,10 @@ class ImportPage(QWidget):
 
     def _pick_file(self) -> None:
         file_name, _ = QFileDialog.getOpenFileName(
-            self, "Seleccionar archivo de movimientos", "", "Archivos soportados (*.txt *.csv)"
+            self,
+            "Seleccionar archivo de movimientos",
+            "",
+            "Archivos soportados (*.txt *.csv *.xlsx)",
         )
         if file_name:
             self._set_selected_file(file_name)
@@ -180,12 +184,31 @@ class ImportPage(QWidget):
         self._update_actions_enabled()
 
     def _load_preview(self, path: Path) -> None:
+        if path.suffix.lower() == ".xlsx":
+            self._load_excel_preview(path)
+            return
         try:
             text = decode_bytes(path.read_bytes())
         except OSError as exc:
             self._preview.setPlainText(f"No se pudo leer el archivo: {exc}")
             return
         lines = text.splitlines()[:15]
+        self._preview.setPlainText("\n".join(lines))
+
+    def _load_excel_preview(self, path: Path) -> None:
+        try:
+            workbook = openpyxl.load_workbook(path, data_only=True, read_only=True)
+            try:
+                worksheet = workbook.active
+                lines = [
+                    "\t".join("" if cell is None else str(cell) for cell in row)
+                    for row in worksheet.iter_rows(values_only=True, max_row=15)
+                ]
+            finally:
+                workbook.close()
+        except Exception as exc:  # noqa: BLE001 - un archivo corrupto no debe tumbar la UI
+            self._preview.setPlainText(f"No se pudo leer el archivo: {exc}")
+            return
         self._preview.setPlainText("\n".join(lines))
 
     def _update_actions_enabled(self) -> None:
@@ -214,7 +237,7 @@ class ImportPage(QWidget):
             QMessageBox.warning(self, "Banco requerido", "Selecciona un banco antes de validar.")
             return
         try:
-            parser = get_parser_for_bank(bank_code)
+            parser = get_parser_for_bank(bank_code, self._selected_file)
             outcome = parser.parse(self._selected_file)
         except UnsupportedParserError as exc:
             QMessageBox.critical(self, "Archivo no soportado", str(exc))
@@ -265,7 +288,7 @@ class ImportPage(QWidget):
         self._selected_file = None
         self._bank_combo.setCurrentIndex(-1)
         self._account_combo.clear()
-        self._drop_area.set_file_name("Arrastra un archivo TXT o CSV aquí, o usa el botón de abajo.")
+        self._drop_area.set_file_name("Arrastra un archivo TXT, CSV o XLSX aquí, o usa el botón de abajo.")
         self._file_type_label.clear()
         self._preview.clear()
         self._validation_label.clear()

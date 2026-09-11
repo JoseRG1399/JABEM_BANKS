@@ -66,7 +66,7 @@ def import_file(
         )
 
     display_name = original_name or file_path.name
-    parser = get_parser_for_bank(bank_account.bank.code)
+    parser = get_parser_for_bank(bank_account.bank.code, file_path)
     parse_outcome = parser.parse(file_path)
 
     imported_file = ImportedFile(

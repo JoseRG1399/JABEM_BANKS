@@ -79,7 +79,7 @@ BRANCH_IDENTIFIERS = [
     {"identifier": "4219", "branch_number": "08", "bank_account_alias": "MIFEL"},
     {"identifier": "6262", "branch_number": "09", "bank_account_alias": "MIFEL"},
     {"identifier": "6805", "branch_number": "10", "bank_account_alias": "MIFEL"},
-    {"identifier": "4069", "branch_number": "11", "bank_account_alias": "MIFEL"},
+    {"identifier": "4062", "branch_number": "11", "bank_account_alias": "MIFEL"},
     {"identifier": "4061", "branch_number": "12", "bank_account_alias": "MIFEL"},
     {"identifier": "0613", "branch_number": "13", "bank_account_alias": "BBVA"},
     {"identifier": "5534", "branch_number": "14", "bank_account_alias": "MIFEL"},
