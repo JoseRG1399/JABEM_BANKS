@@ -59,6 +59,13 @@ class MultiSelectComboBox(QComboBox):
                 values.append(item.data(Qt.ItemDataRole.UserRole))
         return values
 
+    def checked_labels(self) -> list[str]:
+        return [
+            self._item_model.item(row).text()
+            for row in range(self._item_model.rowCount())
+            if self._item_model.item(row).checkState() == Qt.CheckState.Checked
+        ]
+
     def set_checked_values(self, values: list) -> None:
         wanted = set(values)
         self._item_model.blockSignals(True)
