@@ -8,7 +8,7 @@ pandas cuando sea posible").
 from __future__ import annotations
 
 import datetime as dt
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 
 from sqlalchemy import func, or_
@@ -327,6 +327,7 @@ def consolidated_by_date_branch_account(
 # ---------------------------------------------------------------------------
 @dataclass
 class BranchPivotRow:
+    branch_id: int
     branch_label: str
     values_by_day: dict[dt.date, int] = field(default_factory=dict)
 
@@ -366,28 +367,28 @@ def branch_day_pivot(
     value_column = _value_column(value_type)
 
     query = session.query(
-        Branch.branch_number, Branch.name, Movement.movement_date, value_column
+        Branch.id, Branch.branch_number, Branch.name, Movement.movement_date, value_column
     ).join(Branch, Movement.branch_id == Branch.id)
     query = _apply_common_filters(query, filters)
     rows = (
-        query.group_by(Branch.branch_number, Branch.name, Movement.movement_date)
+        query.group_by(Branch.id, Branch.branch_number, Branch.name, Movement.movement_date)
         .order_by(Branch.branch_number, Movement.movement_date)
         .all()
     )
 
     days: list[dt.date] = []
     branch_rows: list[BranchPivotRow] = []
-    branch_index: dict[str, BranchPivotRow] = {}
+    branch_index: dict[int, BranchPivotRow] = {}
 
-    for branch_number, branch_name, movement_date, value in rows:
+    for branch_id, branch_number, branch_name, movement_date, value in rows:
         if movement_date not in days:
             days.append(movement_date)
 
         branch_label = f"{branch_number}. {branch_name}"
-        branch_row = branch_index.get(branch_label)
+        branch_row = branch_index.get(branch_id)
         if branch_row is None:
-            branch_row = BranchPivotRow(branch_label=branch_label)
-            branch_index[branch_label] = branch_row
+            branch_row = BranchPivotRow(branch_id=branch_id, branch_label=branch_label)
+            branch_index[branch_id] = branch_row
             branch_rows.append(branch_row)
         branch_row.values_by_day[movement_date] = (
             branch_row.values_by_day.get(movement_date, 0) + int(value)
@@ -395,3 +396,18 @@ def branch_day_pivot(
 
     days.sort()
     return BranchDayPivotReport(days=days, branch_rows=branch_rows)
+
+
+def movements_for_branch_day(
+    session: Session, filters: ReportFilter, branch_id: int, day: dt.date
+) -> list[Movement]:
+    """Detalle de los movimientos que forman una celda del pivote sucursal/día.
+
+    Se ordenan por ``id`` (orden de inserción) para que coincidan con el
+    orden consecutivo en el que se importaron, igual que en el archivo de
+    origen.
+    """
+    detail_filters = replace(filters, date_from=day, date_to=day, branch_ids=[branch_id])
+    query = session.query(Movement).join(BankAccount, Movement.bank_account_id == BankAccount.id)
+    query = _apply_common_filters(query, detail_filters, joined_account=True)
+    return query.order_by(Movement.id).all()

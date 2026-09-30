@@ -5,11 +5,13 @@ import datetime as dt
 import html as html_lib
 from pathlib import Path
 
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QPageLayout, QTextDocument
 from PySide6.QtPrintSupport import QPrintPreviewDialog, QPrinter
 from PySide6.QtWidgets import (
     QComboBox,
     QDateEdit,
+    QDialog,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -33,6 +35,7 @@ from app.schemas.report_filter import ReportFilter
 from app.services import export_service, report_service
 from app.services.report_service import (
     BranchDayPivotReport,
+    BranchPivotRow,
     ConsolidatedReport,
     ReportRow,
     ReportValueType,
@@ -62,6 +65,17 @@ VALUE_TYPE_OPTIONS = [
 ]
 
 UNCLASSIFIED_COLUMNS = ["Fecha", "Banco", "Cuenta", "Concepto / Referencia", "Cargo", "Abono", "Archivo"]
+
+MOVEMENT_DETAIL_COLUMNS = [
+    "Fecha",
+    "Banco",
+    "Cuenta",
+    "Concepto / Referencia",
+    "Cargo",
+    "Abono",
+    "Categoría",
+    "Archivo",
+]
 
 REPORT_PRINT_STYLE = """
 <style>
@@ -207,6 +221,7 @@ class ReportsPage(QWidget):
         self._pivot_table = QTableWidget(0, 0)
         self._pivot_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._pivot_table.horizontalHeader().setStretchLastSection(True)
+        self._pivot_table.cellDoubleClicked.connect(self._on_pivot_cell_double_clicked)
         self._results_stack.addWidget(self._pivot_table)
 
         outer.addWidget(self._results_stack, stretch=1)
@@ -436,6 +451,69 @@ class ReportsPage(QWidget):
 
         self._pivot_table.resizeColumnsToContents()
         self._totals_label.setText(f"Total general: {format_currency(report.grand_total_cents)}")
+
+    def _on_pivot_cell_double_clicked(self, row: int, column: int) -> None:
+        report = self._current_pivot
+        if report is None or row >= len(report.branch_rows):
+            return
+        total_column = self._pivot_table.columnCount() - 1
+        if column <= 0 or column >= total_column:
+            return
+
+        branch_row = report.branch_rows[row]
+        day = report.days[column - 1]
+        if not branch_row.values_by_day.get(day):
+            return
+        self._show_pivot_cell_detail(branch_row, day)
+
+    def _show_pivot_cell_detail(self, branch_row: BranchPivotRow, day: dt.date) -> None:
+        filters = self._current_filters_snapshot or self._current_filters()
+        with self._database.session_scope() as session:
+            movements = report_service.movements_for_branch_day(
+                session, filters, branch_row.branch_id, day
+            )
+            rows_data = [self._movement_detail_values(m) for m in movements]
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(
+            f"Movimientos — {branch_row.branch_label} — {format_date_for_display(day)}"
+        )
+        dialog.resize(950, 500)
+        layout = QVBoxLayout(dialog)
+
+        total = branch_row.values_by_day.get(day, 0)
+        summary = QLabel(f"{len(rows_data)} movimiento(s) — Total: {format_currency(total)}")
+        layout.addWidget(summary)
+
+        columns = MOVEMENT_DETAIL_COLUMNS
+        table = QTableWidget(len(rows_data), len(columns))
+        table.setHorizontalHeaderLabels(columns)
+        table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        table.horizontalHeader().setStretchLastSection(True)
+        for row_index, values in enumerate(rows_data):
+            for col_index, value in enumerate(values):
+                table.setItem(row_index, col_index, QTableWidgetItem(value))
+        table.resizeColumnsToContents()
+        layout.addWidget(table)
+
+        close_button = QPushButton("Cerrar")
+        close_button.clicked.connect(dialog.accept)
+        layout.addWidget(close_button, alignment=Qt.AlignmentFlag.AlignRight)
+
+        dialog.exec()
+
+    @staticmethod
+    def _movement_detail_values(movement) -> list[str]:
+        return [
+            format_date_for_display(movement.movement_date),
+            movement.bank_account.bank.name if movement.bank_account else "",
+            movement.bank_account.alias if movement.bank_account else "",
+            movement.description_original,
+            format_currency(movement.charge_cents) if movement.charge_cents else "",
+            format_currency(movement.payment_cents) if movement.payment_cents else "",
+            movement.category.name if movement.category else "",
+            movement.imported_file.original_name if movement.imported_file else "",
+        ]
 
     # ------------------------------------------------------------------
     def _on_export(self) -> None:
