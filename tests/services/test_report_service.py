@@ -235,6 +235,41 @@ def test_commissions_and_vat(db_session, scenario):
     assert len(rows) == 2
 
 
+def test_commissions_weighted_by_bank(db_session, scenario):
+    mifel = scenario["mifel"]
+    commission = db_session.query(MovementCategory).filter_by(code="COMMISSION").one()
+    imported_file = db_session.query(ImportedFile).one()
+    db_session.add(
+        Movement(
+            bank_account_id=mifel.id,
+            category_id=commission.id,
+            imported_file_id=imported_file.id,
+            movement_date=dt.date(2026, 7, 2),
+            description_original="COMISION",
+            normalized_text="COMISION",
+            charge_cents=5000,
+            payment_cents=0,
+            movement_hash="h-mifel-comm",
+            occurrence_number=1,
+            classification_status="CLASSIFIED",
+            classification_method="NONE",
+            source_row_number=1,
+        )
+    )
+    db_session.flush()
+
+    report = report_service.commissions_weighted_by_bank(db_session, ReportFilter())
+    by_bank = {row.bank_name: row for row in report.rows}
+    bbva = by_bank[scenario["bbva"].bank.name]
+    mifel_row = by_bank[mifel.bank.name]
+
+    assert (bbva.commission_cents, bbva.vat_cents, bbva.total_cents) == (15000, 2400, 17400)
+    assert (mifel_row.commission_cents, mifel_row.vat_cents) == (5000, 0)
+    assert report.total_cents == 22400
+    assert bbva.weight == pytest.approx(17400 / 22400)
+    assert sum(row.weight for row in report.rows) == pytest.approx(1.0)
+
+
 def test_report_filters_by_date_range(db_session, scenario):
     filters = ReportFilter(date_from=dt.date(2026, 7, 2), date_to=dt.date(2026, 7, 2))
     rows = report_service.totals_by_day(db_session, filters)

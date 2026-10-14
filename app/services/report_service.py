@@ -209,6 +209,76 @@ def commissions_and_vat(session: Session, filters: ReportFilter) -> list[ReportR
 
 
 # ---------------------------------------------------------------------------
+# 7b. Comisiones ponderadas por banco
+# ---------------------------------------------------------------------------
+@dataclass
+class BankCommissionRow:
+    bank_name: str
+    commission_cents: int = 0
+    vat_cents: int = 0
+    weight: float = 0.0  # fracción (0-1) del total de comisiones de todos los bancos
+
+    @property
+    def total_cents(self) -> int:
+        return self.commission_cents + self.vat_cents
+
+
+@dataclass
+class BankCommissionReport:
+    rows: list[BankCommissionRow] = field(default_factory=list)
+
+    @property
+    def commission_cents(self) -> int:
+        return sum(row.commission_cents for row in self.rows)
+
+    @property
+    def vat_cents(self) -> int:
+        return sum(row.vat_cents for row in self.rows)
+
+    @property
+    def total_cents(self) -> int:
+        return sum(row.total_cents for row in self.rows)
+
+
+def commissions_weighted_by_bank(
+    session: Session, filters: ReportFilter
+) -> BankCommissionReport:
+    """Comisiones e IVA de comisiones por banco, con el peso (%) de cada banco
+    sobre el total de comisiones. Los importes son netos (cargo - abono) para
+    que una bonificación de comisión reste en lugar de sumar.
+    """
+    net = func.coalesce(func.sum(Movement.charge_cents - Movement.payment_cents), 0)
+    query = (
+        session.query(Bank.name, MovementCategory.code, net)
+        .join(BankAccount, BankAccount.bank_id == Bank.id)
+        .join(Movement, Movement.bank_account_id == BankAccount.id)
+        .join(MovementCategory, Movement.category_id == MovementCategory.id)
+        .filter(
+            MovementCategory.code.in_(
+                [CategoryCode.COMMISSION.value, CategoryCode.COMMISSION_VAT.value]
+            )
+        )
+    )
+    query = _apply_common_filters(query, filters, joined_account=True)
+    rows = query.group_by(Bank.name, MovementCategory.code).order_by(Bank.name).all()
+
+    by_bank: dict[str, BankCommissionRow] = {}
+    for bank_name, code, amount in rows:
+        bank_row = by_bank.setdefault(bank_name, BankCommissionRow(bank_name=bank_name))
+        if code == CategoryCode.COMMISSION_VAT.value:
+            bank_row.vat_cents += int(amount)
+        else:
+            bank_row.commission_cents += int(amount)
+
+    report = BankCommissionReport(rows=list(by_bank.values()))
+    grand_total = report.total_cents
+    if grand_total:
+        for bank_row in report.rows:
+            bank_row.weight = bank_row.total_cents / grand_total
+    return report
+
+
+# ---------------------------------------------------------------------------
 # 8. Tabla consolidada por fecha, sucursal y banco (cuenta)
 # ---------------------------------------------------------------------------
 @dataclass

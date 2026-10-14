@@ -34,6 +34,7 @@ from app.repositories.category_repository import CategoryRepository
 from app.schemas.report_filter import ReportFilter
 from app.services import export_service, report_service
 from app.services.report_service import (
+    BankCommissionReport,
     BranchDayPivotReport,
     BranchPivotRow,
     ConsolidatedReport,
@@ -45,18 +46,21 @@ from app.utils.dates import format_date_for_display
 from app.utils.money import format_currency
 
 REPORT_TYPES = [
-    ("Totales por día", "day"),
-    ("Totales por banco", "bank"),
-    ("Totales por cuenta", "account"),
-    ("Totales por sucursal", "branch"),
-    ("Totales por categoría", "category"),
-    ("Movimientos sin clasificar", "unclassified"),
-    ("Comisiones e IVA", "commissions"),
-    ("Tabla consolidada (fecha / sucursal / cuenta)", "consolidated"),
-    ("Tabla consolidada por sucursal y día (pivote)", "branch_day_pivot"),
+    ("Flujo diario", "day"),
+    ("Resumen por banco (actividad operativa)", "bank"),
+    ("Resumen por cuenta bancaria", "account"),
+    ("Resumen por sucursal", "branch"),
+    ("Resumen por categoría de movimiento", "category"),
+    ("Pendientes de clasificar", "unclassified"),
+    ("Gasto en comisiones e IVA", "commissions"),
+    ("Peso de comisiones por banco", "bank_commissions"),
+    ("Conciliación de depósitos por día y sucursal", "consolidated"),
+    ("Detalle del periodo por sucursal", "branch_day_pivot"),
 ]
 
 PIVOT_TOTAL_LABEL = "Total general"
+
+BANK_COMMISSION_COLUMNS = ["Banco", "Comisiones", "IVA comisiones", "Total", "Peso %"]
 
 VALUE_TYPE_OPTIONS = [
     ("Abono", ReportValueType.PAYMENT),
@@ -121,6 +125,7 @@ class ReportsPage(QWidget):
         self._current_unclassified: list = []
         self._current_consolidated: ConsolidatedReport | None = None
         self._current_pivot: BranchDayPivotReport | None = None
+        self._current_bank_commissions: BankCommissionReport | None = None
         self._current_title = ""
         self._current_filters_snapshot: ReportFilter | None = None
         self._build_ui()
@@ -224,6 +229,12 @@ class ReportsPage(QWidget):
         self._pivot_table.cellDoubleClicked.connect(self._on_pivot_cell_double_clicked)
         self._results_stack.addWidget(self._pivot_table)
 
+        self._bank_commissions_table = QTableWidget(0, len(BANK_COMMISSION_COLUMNS))
+        self._bank_commissions_table.setHorizontalHeaderLabels(BANK_COMMISSION_COLUMNS)
+        self._bank_commissions_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._bank_commissions_table.horizontalHeader().setStretchLastSection(True)
+        self._results_stack.addWidget(self._bank_commissions_table)
+
         outer.addWidget(self._results_stack, stretch=1)
 
         self._totals_label = QLabel("")
@@ -274,6 +285,8 @@ class ReportsPage(QWidget):
             self._results_stack.setCurrentWidget(self._tree)
         elif key == "branch_day_pivot":
             self._results_stack.setCurrentWidget(self._pivot_table)
+        elif key == "bank_commissions":
+            self._results_stack.setCurrentWidget(self._bank_commissions_table)
         else:
             self._results_stack.setCurrentWidget(self._simple_table)
 
@@ -313,6 +326,11 @@ class ReportsPage(QWidget):
             elif key == "commissions":
                 self._current_rows = report_service.commissions_and_vat(session, filters)
                 self._render_simple_table()
+            elif key == "bank_commissions":
+                self._current_bank_commissions = report_service.commissions_weighted_by_bank(
+                    session, filters
+                )
+                self._render_bank_commissions_table()
             elif key == "unclassified":
                 movements = report_service.unclassified_movements(session, filters)
                 self._render_unclassified_table(movements)
@@ -347,6 +365,50 @@ class ReportsPage(QWidget):
             f"Cargo total: {format_currency(total_charge)}  |  "
             f"Abono total: {format_currency(total_payment)}  |  "
             f"Neto: {format_currency(total_payment - total_charge)}"
+        )
+
+    @staticmethod
+    def _bank_commission_row_values(bank_row) -> list[str]:
+        return [
+            bank_row.bank_name,
+            format_currency(bank_row.commission_cents),
+            format_currency(bank_row.vat_cents),
+            format_currency(bank_row.total_cents),
+            f"{bank_row.weight * 100:.2f}%",
+        ]
+
+    def _render_bank_commissions_table(self) -> None:
+        report = self._current_bank_commissions
+        table = self._bank_commissions_table
+        table.clearContents()
+        if report is None:
+            table.setRowCount(0)
+            return
+
+        bold_font = QFont()
+        bold_font.setBold(True)
+        table.setRowCount(len(report.rows) + 1)
+        for row_index, bank_row in enumerate(report.rows):
+            for col_index, value in enumerate(self._bank_commission_row_values(bank_row)):
+                table.setItem(row_index, col_index, QTableWidgetItem(value))
+
+        total_values = [
+            PIVOT_TOTAL_LABEL,
+            format_currency(report.commission_cents),
+            format_currency(report.vat_cents),
+            format_currency(report.total_cents),
+            "100.00%" if report.total_cents else "0.00%",
+        ]
+        for col_index, value in enumerate(total_values):
+            item = QTableWidgetItem(value)
+            item.setFont(bold_font)
+            table.setItem(len(report.rows), col_index, item)
+
+        table.resizeColumnsToContents()
+        self._totals_label.setText(
+            f"Comisiones: {format_currency(report.commission_cents)}  |  "
+            f"IVA: {format_currency(report.vat_cents)}  |  "
+            f"Total: {format_currency(report.total_cents)}"
         )
 
     def _render_unclassified_table(self, movements: list) -> None:
@@ -546,6 +608,16 @@ class ReportsPage(QWidget):
                     path,
                 ),
             )
+        elif key == "bank_commissions" and self._current_bank_commissions is not None:
+            default_name = export_service.build_safe_filename(
+                "comisiones_por_banco", filters.date_from, filters.date_to
+            )
+            self._save_and_export(
+                default_name,
+                lambda path: export_service.export_bank_commissions_to_excel(
+                    self._current_bank_commissions, filters, path
+                ),
+            )
         elif key == "unclassified":
             QMessageBox.information(
                 self,
@@ -647,9 +719,38 @@ class ReportsPage(QWidget):
             if self._current_pivot is None:
                 return None
             return self._branch_day_pivot_html()
+        if key == "bank_commissions":
+            if self._current_bank_commissions is None:
+                return None
+            return self._bank_commissions_html()
         if not self._current_rows:
             return None
         return self._simple_report_html()
+
+    def _bank_commissions_html(self) -> str:
+        report = self._current_bank_commissions
+        header_html = "".join(f"<th>{html_lib.escape(col)}</th>" for col in BANK_COMMISSION_COLUMNS)
+        rows_html = []
+        for bank_row in report.rows:
+            values = self._bank_commission_row_values(bank_row)
+            cells = f'<td class="label">{html_lib.escape(values[0])}</td>' + "".join(
+                f"<td>{html_lib.escape(value)}</td>" for value in values[1:]
+            )
+            rows_html.append(f"<tr>{cells}</tr>")
+        rows_html.append(
+            '<tr class="total">'
+            f'<td class="label">{html_lib.escape(PIVOT_TOTAL_LABEL)}</td>'
+            f"<td>{html_lib.escape(format_currency(report.commission_cents))}</td>"
+            f"<td>{html_lib.escape(format_currency(report.vat_cents))}</td>"
+            f"<td>{html_lib.escape(format_currency(report.total_cents))}</td>"
+            f"<td>{'100.00%' if report.total_cents else '0.00%'}</td>"
+            "</tr>"
+        )
+        return (
+            f"<table><thead><tr>{header_html}</tr></thead><tbody>"
+            + "".join(rows_html)
+            + "</tbody></table>"
+        )
 
     def _simple_report_html(self) -> str:
         rows_html = []

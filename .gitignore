@@ -29,3 +29,17 @@ htmlcov/
 
 .vscode/
 .idea/
+
+# Instaladores y binarios generados
+installer/*.exe
+installer/Output/
+*.exe
+*.msi
+
+# Entornos y archivos locales
+.env
+*.bak
+*.tmp
+Thumbs.db
+.DS_Store
+.claude/

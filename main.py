@@ -63,7 +63,7 @@ def main() -> None:
     logger = configure_logging(config.paths.logs_dir)
     _install_exception_hook()
     logger.info("Iniciando %s", config.settings.app_name)
-
+    
     set_display_format(config.settings.date_format)
 
     database = get_database()
