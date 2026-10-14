@@ -3,8 +3,11 @@ detalle y exportación a Excel del resultado filtrado."""
 from __future__ import annotations
 
 import datetime as dt
+import html as html_lib
 from pathlib import Path
 
+from PySide6.QtGui import QPageLayout, QTextDocument
+from PySide6.QtPrintSupport import QPrintPreviewDialog, QPrinter
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -51,6 +54,18 @@ COLUMNS = [
     "Archivo",
 ]
 
+MOVEMENTS_PRINT_STYLE = """
+<style>
+    body { font-family: Arial, sans-serif; font-size: 11pt; color: #000000; }
+    h1 { font-size: 14pt; margin-top: 0; margin-bottom: 4px; }
+    .filters { font-size: 9pt; color: #333333; margin-bottom: 8px; }
+    table { border-collapse: collapse; width: 100%; margin-top: 8px; }
+    th, td { border: 1px solid #000000; padding: 3px 5px; text-align: right; font-size: 8pt; }
+    th { background-color: #dddddd; text-align: center; font-weight: bold; }
+    td.label { text-align: left; }
+</style>
+"""
+
 STATUS_LABELS = {
     "CLASSIFIED": "Clasificado",
     "UNCLASSIFIED": "No clasificado",
@@ -77,7 +92,7 @@ class MovementsPage(QWidget):
         outer.setContentsMargins(24, 24, 24, 24)
         outer.setSpacing(12)
 
-        title = QLabel("Movimientos")
+        title = QLabel("Reporte de movimientos")
         title.setObjectName("appTitle")
         outer.addWidget(title)
 
@@ -148,6 +163,14 @@ class MovementsPage(QWidget):
         self._reclassify_button.setEnabled(False)
         self._reclassify_button.clicked.connect(self._on_reclassify_selected)
         selection_row.addWidget(self._reclassify_button)
+
+        print_button = QPushButton("Imprimir")
+        print_button.clicked.connect(self._on_print)
+        selection_row.addWidget(print_button)
+
+        export_button = QPushButton("Exportar Excel")
+        export_button.clicked.connect(self._on_export)
+        selection_row.addWidget(export_button)
         outer.addLayout(selection_row)
 
         self._table = QTableWidget(0, len(COLUMNS))
@@ -167,10 +190,6 @@ class MovementsPage(QWidget):
         self._totals_label.setObjectName("cardLabel")
         footer.addWidget(self._totals_label)
         footer.addStretch()
-
-        export_button = QPushButton("Exportar Excel")
-        export_button.clicked.connect(self._on_export)
-        footer.addWidget(export_button)
         outer.addLayout(footer)
 
         default_page_size = self._config.settings.rows_per_page if self._config else None
@@ -414,6 +433,70 @@ class MovementsPage(QWidget):
                 return
 
         QMessageBox.information(self, "Exportación completa", "Los movimientos se exportaron correctamente.")
+
+    def _on_print(self) -> None:
+        filters = self._current_filters()
+        with self._database.session_scope() as session:
+            movements = MovementRepository(session).list_all_filtered(filters)
+            if not movements:
+                QMessageBox.warning(self, "Sin datos", "No hay movimientos para imprimir con estos filtros.")
+                return
+
+            header_html = "".join(f"<th>{html_lib.escape(col)}</th>" for col in COLUMNS)
+            money_cols = {6, 7, 8}
+            rows_html = []
+            total_charge = total_payment = 0
+            for movement in movements:
+                total_charge += movement.charge_cents or 0
+                total_payment += movement.payment_cents or 0
+                values = [
+                    format_date_for_display(movement.movement_date),
+                    movement.bank_account.bank.name if movement.bank_account else "",
+                    movement.bank_account.alias if movement.bank_account else "",
+                    movement.branch.name if movement.branch else "—",
+                    movement.category.name if movement.category else "—",
+                    movement.description_original,
+                    format_currency(movement.charge_cents) if movement.charge_cents else "",
+                    format_currency(movement.payment_cents) if movement.payment_cents else "",
+                    (
+                        format_currency(movement.balance_cents)
+                        if movement.balance_cents is not None
+                        else "—"
+                    ),
+                    STATUS_LABELS.get(movement.classification_status, movement.classification_status),
+                    movement.imported_file.original_name if movement.imported_file else "",
+                ]
+                cells = "".join(
+                    ("<td>" if i in money_cols else '<td class="label">')
+                    + html_lib.escape(v)
+                    + "</td>"
+                    for i, v in enumerate(values)
+                )
+                rows_html.append(f"<tr>{cells}</tr>")
+            count = len(movements)
+
+        printed_at = dt.datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+        period = (
+            f"Del {format_date_for_display(filters.date_from)} "
+            f"al {format_date_for_display(filters.date_to)}"
+        )
+        body = (
+            "<h1>Reporte de movimientos</h1>"
+            f'<div class="filters">{html_lib.escape(period)} &middot; {count} movimiento(s) &middot; '
+            f"Cargo total: {html_lib.escape(format_currency(total_charge))} &middot; "
+            f"Abono total: {html_lib.escape(format_currency(total_payment))}</div>"
+            f'<div class="filters">Impreso el {printed_at}</div>'
+            f"<table><thead><tr>{header_html}</tr></thead><tbody>{''.join(rows_html)}</tbody></table>"
+        )
+
+        document = QTextDocument()
+        document.setHtml(MOVEMENTS_PRINT_STYLE + body)
+        printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+        printer.setPageOrientation(QPageLayout.Orientation.Landscape)
+        preview = QPrintPreviewDialog(printer, self)
+        preview.setWindowTitle("Vista previa de impresión — Reporte de movimientos")
+        preview.paintRequested.connect(document.print_)
+        preview.exec()
 
     def _on_row_double_clicked(self, row: int, _column: int) -> None:
         if row >= len(self._row_movement_ids):

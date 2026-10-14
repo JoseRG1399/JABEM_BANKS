@@ -674,7 +674,11 @@ class ReportsPage(QWidget):
     def _report_header_html(self) -> str:
         title = html_lib.escape(self._current_title or "Reporte")
         filters_line = self._filters_summary_html()
-        return f'<h1>{title}</h1><div class="filters">{filters_line}</div>'
+        printed_at = dt.datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+        return (
+            f'<h1>{title}</h1><div class="filters">{filters_line}</div>'
+            f'<div class="filters">Impreso el {printed_at}</div>'
+        )
 
     def _filters_summary_html(self) -> str:
         filters = self._current_filters_snapshot
