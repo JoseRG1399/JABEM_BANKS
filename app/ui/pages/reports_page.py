@@ -9,6 +9,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QPageLayout, QTextDocument
 from PySide6.QtPrintSupport import QPrintPreviewDialog, QPrinter
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDateEdit,
     QDialog,
@@ -575,9 +576,21 @@ class ReportsPage(QWidget):
         dialog.resize(950, 500)
         layout = QVBoxLayout(dialog)
 
-        layout.addWidget(QLabel(summary_text))
+        summary_label = QLabel(summary_text)
+        header_row = QHBoxLayout()
+        header_row.addWidget(summary_label, stretch=1)
+        omit_switch = QCheckBox("Omitir cargos")
+        omit_switch.setCursor(Qt.CursorShape.PointingHandCursor)
+        omit_switch.setStyleSheet(
+            "QCheckBox::indicator { width: 36px; height: 18px; border-radius: 9px;"
+            " background-color: #9CA3AF; }"
+            "QCheckBox::indicator:checked { background-color: #1F9254; }"
+        )
+        header_row.addWidget(omit_switch)
+        layout.addLayout(header_row)
 
         columns = MOVEMENT_DETAIL_COLUMNS
+        charge_column = columns.index("Cargo")
         table = QTableWidget(len(rows_data), len(columns))
         table.setHorizontalHeaderLabels(columns)
         table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -587,6 +600,19 @@ class ReportsPage(QWidget):
                 table.setItem(row_index, col_index, QTableWidgetItem(value))
         table.resizeColumnsToContents()
         layout.addWidget(table)
+
+        def apply_omit_charges(omit: bool) -> None:
+            visible = 0
+            for row_index, values in enumerate(rows_data):
+                hide = omit and bool(values[charge_column])
+                table.setRowHidden(row_index, hide)
+                visible += 0 if hide else 1
+            if omit:
+                summary_label.setText(f"{visible} movimiento(s) sin cargos (de {len(rows_data)})")
+            else:
+                summary_label.setText(summary_text)
+
+        omit_switch.toggled.connect(apply_omit_charges)
 
         close_button = QPushButton("Cerrar")
         close_button.clicked.connect(dialog.accept)
