@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 from app.config import Config
 from app.constants import ClassificationStatus
 from app.database.session import Database
+from app.models import ImportedFile
 from app.repositories.bank_repository import BankRepository
 from app.repositories.branch_repository import BranchRepository
 from app.repositories.category_repository import CategoryRepository
@@ -35,6 +36,7 @@ from app.repositories.movement_repository import MovementFilter, MovementReposit
 from app.services import export_service
 from app.ui.dialogs.classify_movement_dialog import ClassifyMovementDialog
 from app.ui.dialogs.movement_detail_dialog import MovementDetailDialog
+from app.ui.widgets.delete_movements import confirm_and_delete_movements
 from app.ui.widgets.filter_bar import FilterBar
 from app.ui.widgets.pagination import Pagination
 from app.utils.dates import format_date_for_display
@@ -164,11 +166,19 @@ class MovementsPage(QWidget):
         self._reclassify_button.clicked.connect(self._on_reclassify_selected)
         selection_row.addWidget(self._reclassify_button)
 
+        self._delete_button = QPushButton("Eliminar seleccionados")
+        self._delete_button.setObjectName("dangerButton")
+        self._delete_button.setEnabled(False)
+        self._delete_button.clicked.connect(self._on_delete_selected)
+        selection_row.addWidget(self._delete_button)
+
         print_button = QPushButton("Imprimir")
+        print_button.setObjectName("infoButton")
         print_button.clicked.connect(self._on_print)
         selection_row.addWidget(print_button)
 
         export_button = QPushButton("Exportar Excel")
+        export_button.setObjectName("successButton")
         export_button.clicked.connect(self._on_export)
         selection_row.addWidget(export_button)
         outer.addLayout(selection_row)
@@ -288,7 +298,53 @@ class MovementsPage(QWidget):
             return None
         return int(value * 100)
 
+    def _filter_conflict(self, filters: MovementFilter) -> str | None:
+        """Devuelve el motivo si la combinación de filtros no puede dar resultados."""
+        if filters.date_from and filters.date_to and filters.date_from > filters.date_to:
+            return "La fecha inicial no puede ser posterior a la fecha final."
+
+        low, high = filters.min_amount_cents, filters.max_amount_cents
+        if low is not None and high is not None and low > high:
+            return "El importe mínimo no puede ser mayor que el importe máximo."
+
+        category_label = self._category_combo.currentText()
+        if filters.category_id is not None:
+            is_unclassified_category = category_label == "No clasificado"
+            if filters.classification_status in ("CLASSIFIED", "MANUAL") and is_unclassified_category:
+                return (
+                    "La categoría «No clasificado» no puede combinarse con el estado "
+                    "Clasificado o Manual."
+                )
+            if filters.classification_status == "UNCLASSIFIED" and not is_unclassified_category:
+                return (
+                    "El estado «No clasificado» solo puede combinarse con la categoría "
+                    "«No clasificado»."
+                )
+
+        if filters.imported_file_id is not None and (
+            filters.bank_account_id is not None or filters.bank_id is not None
+        ):
+            with self._database.session_scope() as session:
+                imported_file = session.get(ImportedFile, filters.imported_file_id)
+                account = imported_file.bank_account if imported_file else None
+                if account is not None:
+                    if filters.bank_account_id is not None and account.id != filters.bank_account_id:
+                        return "El archivo importado seleccionado pertenece a otra cuenta."
+                    if filters.bank_id is not None and account.bank_id != filters.bank_id:
+                        return "El archivo importado seleccionado pertenece a otro banco."
+        return None
+
+    def _validated_filters(self) -> MovementFilter | None:
+        filters = self._current_filters()
+        conflict = self._filter_conflict(filters)
+        if conflict:
+            QMessageBox.warning(self, "Filtros incompatibles", conflict)
+            return None
+        return filters
+
     def _on_search(self) -> None:
+        if self._validated_filters() is None:
+            return
         self._current_page = 1
         self._pagination.reset()
         self._load_page()
@@ -395,6 +451,14 @@ class MovementsPage(QWidget):
         count = len(self._selected_movement_ids())
         self._selection_label.setText(f"{count} movimiento(s) seleccionado(s)")
         self._reclassify_button.setEnabled(count > 0)
+        self._delete_button.setEnabled(count > 0)
+
+    def _on_delete_selected(self) -> None:
+        movement_ids = self._selected_movement_ids()
+        if not movement_ids:
+            return
+        if confirm_and_delete_movements(self, self._database, movement_ids) is not None:
+            self._load_page()
 
     def _on_reclassify_selected(self) -> None:
         movement_ids = self._selected_movement_ids()
@@ -405,7 +469,9 @@ class MovementsPage(QWidget):
             self._load_page()
 
     def _on_export(self) -> None:
-        filters = self._current_filters()
+        filters = self._validated_filters()
+        if filters is None:
+            return
         with self._database.session_scope() as session:
             repo = MovementRepository(session)
             movements = repo.list_all_filtered(filters)
@@ -435,7 +501,9 @@ class MovementsPage(QWidget):
         QMessageBox.information(self, "Exportación completa", "Los movimientos se exportaron correctamente.")
 
     def _on_print(self) -> None:
-        filters = self._current_filters()
+        filters = self._validated_filters()
+        if filters is None:
+            return
         with self._database.session_scope() as session:
             movements = MovementRepository(session).list_all_filtered(filters)
             if not movements:

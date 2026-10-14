@@ -235,6 +235,17 @@ def test_commissions_and_vat(db_session, scenario):
     assert len(rows) == 2
 
 
+def test_movements_for_category_matches_category_totals(db_session, scenario):
+    filters = ReportFilter()
+    rows = report_service.totals_by_category(db_session, filters)
+    assert rows
+    for row in rows:
+        assert row.key_id is not None
+        movements = report_service.movements_for_category(db_session, filters, row.key_id)
+        assert sum(m.charge_cents for m in movements) == row.charge_cents
+        assert sum(m.payment_cents for m in movements) == row.payment_cents
+
+
 def test_commissions_weighted_by_bank(db_session, scenario):
     mifel = scenario["mifel"]
     commission = db_session.query(MovementCategory).filter_by(code="COMMISSION").one()

@@ -196,10 +196,12 @@ class ReportsPage(QWidget):
         actions_row.addWidget(generate_button)
 
         export_button = QPushButton("Exportar a Excel")
+        export_button.setObjectName("successButton")
         export_button.clicked.connect(self._on_export)
         actions_row.addWidget(export_button)
 
         print_button = QPushButton("Imprimir")
+        print_button.setObjectName("infoButton")
         print_button.clicked.connect(self._on_print)
         actions_row.addWidget(print_button)
         actions_row.addStretch()
@@ -211,6 +213,7 @@ class ReportsPage(QWidget):
         self._simple_table.setHorizontalHeaderLabels(["Concepto", "Cargo", "Abono", "Neto"])
         self._simple_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._simple_table.horizontalHeader().setStretchLastSection(True)
+        self._simple_table.cellDoubleClicked.connect(self._on_simple_cell_double_clicked)
         self._results_stack.addWidget(self._simple_table)
 
         self._unclassified_table = QTableWidget(0, len(UNCLASSIFIED_COLUMNS))
@@ -528,6 +531,29 @@ class ReportsPage(QWidget):
             return
         self._show_pivot_cell_detail(branch_row, day)
 
+    def _on_simple_cell_double_clicked(self, row: int, _column: int) -> None:
+        if self._current_report_key() != "category" or row >= len(self._current_rows):
+            return
+        report_row = self._current_rows[row]
+        if report_row.key_id is None:
+            return
+        filters = self._current_filters_snapshot or self._current_filters()
+        with self._database.session_scope() as session:
+            movements = report_service.movements_for_category(session, filters, report_row.key_id)
+            rows_data = [self._movement_detail_values(m) for m in movements]
+        period = (
+            f"{format_date_for_display(filters.date_from)} al "
+            f"{format_date_for_display(filters.date_to)}"
+        )
+        summary = (
+            f"{len(rows_data)} movimiento(s) — Cargo: {format_currency(report_row.charge_cents)}  |  "
+            f"Abono: {format_currency(report_row.payment_cents)}  |  "
+            f"Neto: {format_currency(report_row.net_cents)}"
+        )
+        self._show_movements_dialog(
+            f"Movimientos — {report_row.label} — {period}", summary, rows_data
+        )
+
     def _show_pivot_cell_detail(self, branch_row: BranchPivotRow, day: dt.date) -> None:
         filters = self._current_filters_snapshot or self._current_filters()
         with self._database.session_scope() as session:
@@ -536,16 +562,20 @@ class ReportsPage(QWidget):
             )
             rows_data = [self._movement_detail_values(m) for m in movements]
 
-        dialog = QDialog(self)
-        dialog.setWindowTitle(
-            f"Movimientos — {branch_row.branch_label} — {format_date_for_display(day)}"
+        total = branch_row.values_by_day.get(day, 0)
+        self._show_movements_dialog(
+            f"Movimientos — {branch_row.branch_label} — {format_date_for_display(day)}",
+            f"{len(rows_data)} movimiento(s) — Total: {format_currency(total)}",
+            rows_data,
         )
+
+    def _show_movements_dialog(self, title: str, summary_text: str, rows_data: list[list[str]]) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle(title)
         dialog.resize(950, 500)
         layout = QVBoxLayout(dialog)
 
-        total = branch_row.values_by_day.get(day, 0)
-        summary = QLabel(f"{len(rows_data)} movimiento(s) — Total: {format_currency(total)}")
-        layout.addWidget(summary)
+        layout.addWidget(QLabel(summary_text))
 
         columns = MOVEMENT_DETAIL_COLUMNS
         table = QTableWidget(len(rows_data), len(columns))

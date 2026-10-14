@@ -23,6 +23,7 @@ from app.database.session import Database
 from app.repositories.bank_repository import BankRepository
 from app.repositories.movement_repository import MovementFilter, MovementRepository
 from app.ui.dialogs.classify_movement_dialog import ClassifyMovementDialog
+from app.ui.widgets.delete_movements import confirm_and_delete_movements
 from app.ui.widgets.filter_bar import FilterBar
 from app.ui.widgets.pagination import Pagination
 from app.utils.dates import format_date_for_display
@@ -86,6 +87,12 @@ class UnclassifiedPage(QWidget):
         self._reclassify_button.setEnabled(False)
         self._reclassify_button.clicked.connect(self._on_reclassify_selected)
         actions_row.addWidget(self._reclassify_button)
+
+        self._delete_button = QPushButton("Eliminar seleccionados")
+        self._delete_button.setObjectName("dangerButton")
+        self._delete_button.setEnabled(False)
+        self._delete_button.clicked.connect(self._on_delete_selected)
+        actions_row.addWidget(self._delete_button)
         outer.addLayout(actions_row)
 
         self._table = QTableWidget(0, len(COLUMNS))
@@ -188,6 +195,12 @@ class UnclassifiedPage(QWidget):
         count = len(self._selected_movement_ids())
         self._selection_label.setText(f"{count} movimiento(s) seleccionado(s)")
         self._reclassify_button.setEnabled(count > 0)
+        self._delete_button.setEnabled(count > 0)
+
+    def _on_delete_selected(self) -> None:
+        movement_ids = self._selected_movement_ids()
+        if confirm_and_delete_movements(self, self._database, movement_ids) is not None:
+            self.refresh()
 
     def _on_reclassify_selected(self) -> None:
         movement_ids = self._selected_movement_ids()

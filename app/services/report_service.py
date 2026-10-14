@@ -30,6 +30,7 @@ class ReportRow:
     label: str
     charge_cents: int = 0
     payment_cents: int = 0
+    key_id: int | None = None  # id de la entidad agrupada (p. ej. categoría), para el detalle
 
     @property
     def net_cents(self) -> int:
@@ -154,18 +155,35 @@ def totals_by_branch(session: Session, filters: ReportFilter) -> list[ReportRow]
 def totals_by_category(session: Session, filters: ReportFilter) -> list[ReportRow]:
     charge_sum, payment_sum = _sums()
     query = session.query(
-        MovementCategory.report_order, MovementCategory.name, charge_sum, payment_sum
+        MovementCategory.report_order,
+        MovementCategory.id,
+        MovementCategory.name,
+        charge_sum,
+        payment_sum,
     ).join(Movement, Movement.category_id == MovementCategory.id)
     query = _apply_common_filters(query, filters)
     rows = (
-        query.group_by(MovementCategory.report_order, MovementCategory.name)
+        query.group_by(MovementCategory.report_order, MovementCategory.id, MovementCategory.name)
         .order_by(MovementCategory.report_order)
         .all()
     )
     return [
-        ReportRow(label=name, charge_cents=int(charge), payment_cents=int(payment))
-        for _order, name, charge, payment in rows
+        ReportRow(
+            label=name, charge_cents=int(charge), payment_cents=int(payment), key_id=category_id
+        )
+        for _order, category_id, name, charge, payment in rows
     ]
+
+
+def movements_for_category(
+    session: Session, filters: ReportFilter, category_id: int
+) -> list[Movement]:
+    """Movimientos que componen el total de una categoría en el periodo filtrado,
+    en orden cronológico y de importación."""
+    detail_filters = replace(filters, category_id=category_id)
+    query = session.query(Movement).join(BankAccount, Movement.bank_account_id == BankAccount.id)
+    query = _apply_common_filters(query, detail_filters, joined_account=True)
+    return query.order_by(Movement.movement_date, Movement.id).all()
 
 
 # ---------------------------------------------------------------------------
