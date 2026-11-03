@@ -58,6 +58,8 @@ class CategoryCode(str, enum.Enum):
     VAT_REFUND = "VAT_REFUND"
     CARD_EXPENSES = "CARD_EXPENSES"
     DIRECT_DEBIT_VAT = "DIRECT_DEBIT_VAT"
+    BONIFICATION = "BONIFICATION"
+    BONIFICATION_VAT = "BONIFICATION_VAT"
     UNCLASSIFIED = "UNCLASSIFIED"
 
 
@@ -72,5 +74,7 @@ CATEGORY_DISPLAY_NAMES: dict[str, str] = {
     CategoryCode.VAT_REFUND: "Devolución de IVA",
     CategoryCode.CARD_EXPENSES: "Gastos tarjeta débito",
     CategoryCode.DIRECT_DEBIT_VAT: "IVA domiciliación",
+    CategoryCode.BONIFICATION: "Bonificación",
+    CategoryCode.BONIFICATION_VAT: "IVA bonificación",
     CategoryCode.UNCLASSIFIED: "No clasificado",
 }

@@ -164,6 +164,24 @@ CLASSIFICATION_RULES = [
         "priority": 30,
     },
     {
+        "name": "IVA bonificación",
+        "category_code": CategoryCode.BONIFICATION_VAT.value,
+        "bank_account_alias": "BBVA",
+        "pattern": r"^IVA\s+BONIFICACION\b",
+        "match_type": MatchType.REGEX.value,
+        # Antes que "Bonificación"; después de "Comisión" (30) para que una
+        # bonificación de comisión siga restando en el reporte de comisiones.
+        "priority": 35,
+    },
+    {
+        "name": "Bonificación",
+        "category_code": CategoryCode.BONIFICATION.value,
+        "bank_account_alias": "BBVA",
+        "pattern": "BONIFICACION",
+        "match_type": MatchType.CONTAINS.value,
+        "priority": 40,
+    },
+    {
         "name": "Traspaso",
         "category_code": CategoryCode.TRANSFER.value,
         "bank_account_alias": "BBVA",
