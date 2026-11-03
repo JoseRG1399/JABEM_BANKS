@@ -324,6 +324,48 @@ def test_consolidated_report_excludes_movements_without_branch(db_session, scena
     assert total_branch_rows == 3
 
 
+def test_consolidated_report_includes_uber_clip_deposits_without_branch(db_session, scenario):
+    mifel2 = db_session.query(BankAccount).filter_by(alias="MIFEL2").one()
+    imported_file = db_session.query(ImportedFile).one()
+    uber = db_session.query(MovementCategory).filter_by(code="UBER").one()
+
+    db_session.add(
+        Movement(
+            bank_account_id=mifel2.id,
+            branch_id=None,
+            category_id=uber.id,
+            imported_file_id=imported_file.id,
+            movement_date=dt.date(2026, 7, 1),
+            description_original="UBRPAGOSMEXICO",
+            normalized_text="UBRPAGOSMEXICO",
+            payment_cents=30000,
+            movement_hash="h-uber",
+            occurrence_number=1,
+            classification_status="CLASSIFIED",
+            classification_method="SPECIAL_RULE",
+            source_row_number=1,
+        )
+    )
+    db_session.flush()
+
+    report = report_service.consolidated_by_date_branch_account(db_session, ReportFilter())
+    assert report.account_aliases == ["BBVA", "MIFEL", "MIFEL2"]
+    day1 = next(g for g in report.day_groups if g.day == dt.date(2026, 7, 1))
+    assert day1.values_by_account["MIFEL2"] == 30000
+    assert day1.total_cents == 180000
+    assert any(row.branch_label == "Uber" for row in day1.branch_rows)
+
+    charge_report = report_service.consolidated_by_date_branch_account(
+        db_session, ReportFilter(), value_type=ReportValueType.CHARGE
+    )
+    assert "MIFEL2" not in charge_report.account_aliases
+
+    branch_filtered = report_service.consolidated_by_date_branch_account(
+        db_session, ReportFilter(branch_ids=[scenario["branch_alfredo"].id])
+    )
+    assert "MIFEL2" not in branch_filtered.account_aliases
+
+
 def test_branch_day_pivot_structure(db_session, scenario):
     report = report_service.branch_day_pivot(db_session, ReportFilter())
 
@@ -348,3 +390,23 @@ def test_branch_day_pivot_excludes_movements_without_branch(db_session, scenario
     total_cells = sum(len(row.values_by_day) for row in report.branch_rows)
     # Solo 3 movimientos del escenario tienen sucursal asignada.
     assert total_cells == 3
+
+
+def test_day_account_report_structure(db_session, scenario):
+    report = report_service.day_account_report(db_session, ReportFilter())
+    assert report.account_aliases == ["BBVA", "MIFEL", "MIFEL2"]
+    assert [row.day for row in report.rows] == [
+        dt.date(2026, 7, 1),
+        dt.date(2026, 7, 2),
+        dt.date(2026, 7, 3),
+    ]
+    assert report.rows[0].values_by_account == {"BBVA": 100000, "MIFEL": 50000}
+    assert report.rows[1].values_by_account == {"BBVA": 20000}
+    assert report.totals_by_account == {"BBVA": 120000, "MIFEL": 50000, "MIFEL2": 0}
+    assert report.grand_total_cents == 170000
+
+
+def test_day_account_report_value_type_charge(db_session, scenario):
+    report = report_service.day_account_report(db_session, ReportFilter(), ReportValueType.CHARGE)
+    assert report.totals_by_account["BBVA"] == 17400
+    assert report.totals_by_account["MIFEL"] == 5000

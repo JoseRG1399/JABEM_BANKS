@@ -56,6 +56,8 @@ COLUMNS = [
     "Archivo",
 ]
 
+PRINT_OMITTED_COLUMNS = {"Banco", "Saldo", "Clasificación", "Archivo"}
+
 MOVEMENTS_PRINT_STYLE = """
 <style>
     body { font-family: Arial, sans-serif; font-size: 11pt; color: #000000; }
@@ -510,8 +512,11 @@ class MovementsPage(QWidget):
                 QMessageBox.warning(self, "Sin datos", "No hay movimientos para imprimir con estos filtros.")
                 return
 
-            header_html = "".join(f"<th>{html_lib.escape(col)}</th>" for col in COLUMNS)
-            money_cols = {6, 7, 8}
+            print_columns = [
+                col for col in COLUMNS if col not in PRINT_OMITTED_COLUMNS
+            ]
+            header_html = "".join(f"<th>{html_lib.escape(col)}</th>" for col in print_columns)
+            money_cols = {print_columns.index("Cargo"), print_columns.index("Abono")}
             rows_html = []
             total_charge = total_payment = 0
             for movement in movements:
@@ -519,20 +524,12 @@ class MovementsPage(QWidget):
                 total_payment += movement.payment_cents or 0
                 values = [
                     format_date_for_display(movement.movement_date),
-                    movement.bank_account.bank.name if movement.bank_account else "",
                     movement.bank_account.alias if movement.bank_account else "",
                     movement.branch.name if movement.branch else "—",
                     movement.category.name if movement.category else "—",
                     movement.description_original,
                     format_currency(movement.charge_cents) if movement.charge_cents else "",
                     format_currency(movement.payment_cents) if movement.payment_cents else "",
-                    (
-                        format_currency(movement.balance_cents)
-                        if movement.balance_cents is not None
-                        else "—"
-                    ),
-                    STATUS_LABELS.get(movement.classification_status, movement.classification_status),
-                    movement.imported_file.original_name if movement.imported_file else "",
                 ]
                 cells = "".join(
                     ("<td>" if i in money_cols else '<td class="label">')

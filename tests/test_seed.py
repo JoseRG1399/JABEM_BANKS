@@ -12,14 +12,14 @@ def test_seed_catalogs_creates_expected_records(db_session):
     assert result.branches_created == 21
     assert result.identifiers_created == 21
     assert result.categories_created == 11
-    assert result.rules_created == 8
+    assert result.rules_created == 11
 
     assert db_session.query(Bank).count() == 2
     assert db_session.query(BankAccount).count() == 3
     assert db_session.query(Branch).count() == 21
     assert db_session.query(BranchIdentifier).count() == 21
     assert db_session.query(MovementCategory).count() == 11
-    assert db_session.query(ClassificationRule).count() == 8
+    assert db_session.query(ClassificationRule).count() == 11
 
 
 def test_seed_catalogs_is_idempotent(db_session):
@@ -32,7 +32,7 @@ def test_seed_catalogs_is_idempotent(db_session):
     assert db_session.query(Branch).count() == 21
     assert db_session.query(BranchIdentifier).count() == 21
     assert db_session.query(MovementCategory).count() == 11
-    assert db_session.query(ClassificationRule).count() == 8
+    assert db_session.query(ClassificationRule).count() == 11
 
 
 def test_mifel2_account_has_no_branch_identifiers(db_session):

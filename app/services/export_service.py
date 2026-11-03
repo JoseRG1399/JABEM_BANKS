@@ -25,6 +25,7 @@ from app.services.report_service import (
     BankCommissionReport,
     BranchDayPivotReport,
     ConsolidatedReport,
+    DayAccountReport,
     ReportRow,
 )
 from app.utils.dates import format_date_for_display
@@ -274,6 +275,75 @@ def export_bank_commissions_to_excel(
     ws.freeze_panes = ws.cell(row=start_row + 1, column=1).coordinate
     if last_data_row >= start_row:
         ws.auto_filter.ref = f"A{start_row}:E{last_data_row}"
+    _autosize_columns(ws, len(headers))
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    workbook.save(output_path)
+    return output_path
+
+
+# ---------------------------------------------------------------------------
+# Reporte por cuentas (día × cuenta)
+# ---------------------------------------------------------------------------
+def export_day_account_report_to_excel(
+    report: DayAccountReport,
+    value_type_label: str,
+    filters: ReportFilter,
+    output_path: Path,
+    generated_at: dt.datetime | None = None,
+) -> Path:
+    generated_at = generated_at or dt.datetime.now()
+    workbook = Workbook()
+    ws = workbook.active
+    ws.title = "Cuentas"
+
+    start_row = _write_header_info(
+        ws,
+        f"Reporte por cuentas ({value_type_label})",
+        generated_at,
+        describe_filters(filters),
+    )
+
+    headers = ["Fecha", *report.account_aliases, "Total"]
+    for col_index, header in enumerate(headers, start=1):
+        cell = ws.cell(row=start_row, column=col_index, value=header)
+        cell.fill = HEADER_FILL
+        cell.font = HEADER_FONT
+
+    current_row = start_row + 1
+    for day_row in report.rows:
+        ws.cell(row=current_row, column=1, value=format_date_for_display(day_row.day))
+        for col_index, alias in enumerate(report.account_aliases, start=2):
+            ws.cell(
+                row=current_row,
+                column=col_index,
+                value=_money(day_row.values_by_account.get(alias)),
+            ).number_format = MONEY_FORMAT
+        ws.cell(
+            row=current_row, column=len(headers), value=float(cents_to_decimal(day_row.total_cents))
+        ).number_format = MONEY_FORMAT
+        current_row += 1
+
+    last_data_row = current_row - 1
+    ws.cell(row=current_row, column=1, value="TOTAL GENERAL").font = BOLD
+    totals = report.totals_by_account
+    for col_index, alias in enumerate(report.account_aliases, start=2):
+        cell = ws.cell(
+            row=current_row, column=col_index, value=float(cents_to_decimal(totals.get(alias, 0)))
+        )
+        cell.number_format = MONEY_FORMAT
+        cell.font = BOLD
+    grand_cell = ws.cell(
+        row=current_row,
+        column=len(headers),
+        value=float(cents_to_decimal(report.grand_total_cents)),
+    )
+    grand_cell.number_format = MONEY_FORMAT
+    grand_cell.font = BOLD
+
+    ws.freeze_panes = ws.cell(row=start_row + 1, column=2).coordinate
+    if last_data_row >= start_row:
+        ws.auto_filter.ref = f"A{start_row}:{get_column_letter(len(headers))}{last_data_row}"
     _autosize_columns(ws, len(headers))
 
     output_path.parent.mkdir(parents=True, exist_ok=True)

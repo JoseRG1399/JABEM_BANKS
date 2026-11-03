@@ -39,6 +39,7 @@ from app.services.report_service import (
     BranchDayPivotReport,
     BranchPivotRow,
     ConsolidatedReport,
+    DayAccountReport,
     ReportRow,
     ReportValueType,
 )
@@ -57,6 +58,7 @@ REPORT_TYPES = [
     ("Peso de comisiones por banco", "bank_commissions"),
     ("Conciliación de depósitos por día y sucursal", "consolidated"),
     ("Detalle del periodo por sucursal", "branch_day_pivot"),
+    ("Reporte por cuentas (BBVA, MIFEL y MIFEL2)", "day_account"),
 ]
 
 PIVOT_TOTAL_LABEL = "Total general"
@@ -127,6 +129,7 @@ class ReportsPage(QWidget):
         self._current_consolidated: ConsolidatedReport | None = None
         self._current_pivot: BranchDayPivotReport | None = None
         self._current_bank_commissions: BankCommissionReport | None = None
+        self._current_day_account: DayAccountReport | None = None
         self._current_title = ""
         self._current_filters_snapshot: ReportFilter | None = None
         self._build_ui()
@@ -239,6 +242,11 @@ class ReportsPage(QWidget):
         self._bank_commissions_table.horizontalHeader().setStretchLastSection(True)
         self._results_stack.addWidget(self._bank_commissions_table)
 
+        self._day_account_table = QTableWidget(0, 0)
+        self._day_account_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._day_account_table.horizontalHeader().setStretchLastSection(True)
+        self._results_stack.addWidget(self._day_account_table)
+
         outer.addWidget(self._results_stack, stretch=1)
 
         self._totals_label = QLabel("")
@@ -282,8 +290,12 @@ class ReportsPage(QWidget):
 
     def _on_report_type_changed(self) -> None:
         key = self._current_report_key()
-        self._value_type_combo.setVisible(key in ("consolidated", "branch_day_pivot"))
-        if key == "unclassified":
+        self._value_type_combo.setVisible(
+            key in ("consolidated", "branch_day_pivot", "day_account")
+        )
+        if key == "day_account":
+            self._results_stack.setCurrentWidget(self._day_account_table)
+        elif key == "unclassified":
             self._results_stack.setCurrentWidget(self._unclassified_table)
         elif key == "consolidated":
             self._results_stack.setCurrentWidget(self._tree)
@@ -348,6 +360,55 @@ class ReportsPage(QWidget):
                 value_type = self._value_type_combo.currentData()
                 self._current_pivot = report_service.branch_day_pivot(session, filters, value_type)
                 self._render_branch_day_pivot()
+            elif key == "day_account":
+                value_type = self._value_type_combo.currentData()
+                self._current_day_account = report_service.day_account_report(
+                    session, filters, value_type
+                )
+                self._render_day_account_table()
+
+    def _render_day_account_table(self) -> None:
+        report = self._current_day_account
+        table = self._day_account_table
+        table.clear()
+        if report is None:
+            table.setRowCount(0)
+            table.setColumnCount(0)
+            return
+
+        bold_font = QFont()
+        bold_font.setBold(True)
+        headers = ["Fecha", *report.account_aliases, PIVOT_TOTAL_LABEL]
+        table.setColumnCount(len(headers))
+        table.setHorizontalHeaderLabels(headers)
+        table.setRowCount(len(report.rows) + 1)
+
+        for row_index, day_row in enumerate(report.rows):
+            table.setItem(row_index, 0, QTableWidgetItem(format_date_for_display(day_row.day)))
+            for col_index, alias in enumerate(report.account_aliases, start=1):
+                value = day_row.values_by_account.get(alias)
+                table.setItem(
+                    row_index, col_index, QTableWidgetItem(format_currency(value) if value else "")
+                )
+            total_item = QTableWidgetItem(format_currency(day_row.total_cents))
+            total_item.setFont(bold_font)
+            table.setItem(row_index, len(headers) - 1, total_item)
+
+        totals_row = len(report.rows)
+        totals = report.totals_by_account
+        label_item = QTableWidgetItem(PIVOT_TOTAL_LABEL)
+        label_item.setFont(bold_font)
+        table.setItem(totals_row, 0, label_item)
+        for col_index, alias in enumerate(report.account_aliases, start=1):
+            item = QTableWidgetItem(format_currency(totals.get(alias, 0)))
+            item.setFont(bold_font)
+            table.setItem(totals_row, col_index, item)
+        grand_item = QTableWidgetItem(format_currency(report.grand_total_cents))
+        grand_item.setFont(bold_font)
+        table.setItem(totals_row, len(headers) - 1, grand_item)
+
+        table.resizeColumnsToContents()
+        self._totals_label.setText(f"Total general: {format_currency(report.grand_total_cents)}")
 
     def _render_simple_table(self) -> None:
         rows = self._current_rows
@@ -664,6 +725,19 @@ class ReportsPage(QWidget):
                     path,
                 ),
             )
+        elif key == "day_account" and self._current_day_account is not None:
+            default_name = export_service.build_safe_filename(
+                "reporte_cuentas", filters.date_from, filters.date_to
+            )
+            self._save_and_export(
+                default_name,
+                lambda path: export_service.export_day_account_report_to_excel(
+                    self._current_day_account,
+                    self._value_type_combo.currentText(),
+                    filters,
+                    path,
+                ),
+            )
         elif key == "bank_commissions" and self._current_bank_commissions is not None:
             default_name = export_service.build_safe_filename(
                 "comisiones_por_banco", filters.date_from, filters.date_to
@@ -783,9 +857,53 @@ class ReportsPage(QWidget):
             if self._current_bank_commissions is None:
                 return None
             return self._bank_commissions_html()
+        if key == "day_account":
+            if self._current_day_account is None:
+                return None
+            return self._day_account_html()
         if not self._current_rows:
             return None
         return self._simple_report_html()
+
+    def _day_account_html(self) -> str:
+        report = self._current_day_account
+        headers_html = (
+            "<th>Fecha</th>"
+            + "".join(f"<th>{html_lib.escape(alias)}</th>" for alias in report.account_aliases)
+            + f"<th>{html_lib.escape(PIVOT_TOTAL_LABEL)}</th>"
+        )
+        rows_html = []
+        for day_row in report.rows:
+            cells = "".join(
+                f"<td>{html_lib.escape(format_currency(day_row.values_by_account[alias]))}</td>"
+                if day_row.values_by_account.get(alias)
+                else "<td></td>"
+                for alias in report.account_aliases
+            )
+            rows_html.append(
+                "<tr>"
+                f'<td class="label">{html_lib.escape(format_date_for_display(day_row.day))}</td>'
+                f"{cells}"
+                f"<td>{html_lib.escape(format_currency(day_row.total_cents))}</td>"
+                "</tr>"
+            )
+        totals = report.totals_by_account
+        totals_html = "".join(
+            f"<td>{html_lib.escape(format_currency(totals.get(alias, 0)))}</td>"
+            for alias in report.account_aliases
+        )
+        rows_html.append(
+            '<tr class="total">'
+            f'<td class="label">{html_lib.escape(PIVOT_TOTAL_LABEL)}</td>'
+            f"{totals_html}"
+            f"<td>{html_lib.escape(format_currency(report.grand_total_cents))}</td>"
+            "</tr>"
+        )
+        return (
+            f"<table><thead><tr>{headers_html}</tr></thead><tbody>"
+            + "".join(rows_html)
+            + "</tbody></table>"
+        )
 
     def _bank_commissions_html(self) -> str:
         report = self._current_bank_commissions

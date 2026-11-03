@@ -345,6 +345,11 @@ class ConsolidatedReport:
         return sum(day_group.total_cents for day_group in self.day_groups)
 
 
+# Categorías de ingreso que no pertenecen a una sucursal pero sí deben verse en
+# la conciliación de depósitos (cuenta MIFEL2).
+DEPOSIT_SOURCE_CATEGORIES = [CategoryCode.UBER.value, CategoryCode.CLIP.value]
+
+
 def _value_column(value_type: ReportValueType):
     if value_type == ReportValueType.CHARGE:
         return func.coalesce(func.sum(Movement.charge_cents), 0)
@@ -358,8 +363,10 @@ def consolidated_by_date_branch_account(
     filters: ReportFilter,
     value_type: ReportValueType = ReportValueType.PAYMENT,
 ) -> ConsolidatedReport:
-    """Reporte tipo tabla dinámica: solo incluye movimientos con sucursal
-    identificada (es el reporte de conciliación de depósitos por sucursal).
+    """Reporte tipo tabla dinámica: incluye movimientos con sucursal
+    identificada (es el reporte de conciliación de depósitos por sucursal) y,
+    como filas propias, los de las categorías de ingreso sin sucursal
+    (``DEPOSIT_SOURCE_CATEGORIES``, p. ej. Uber y Clip de la cuenta MIFEL2).
     """
     value_column = _value_column(value_type)
 
@@ -381,14 +388,41 @@ def consolidated_by_date_branch_account(
         .all()
     )
 
+    labeled_rows = [
+        (movement_date, f"{branch_number}. {branch_name}", account_alias, value)
+        for movement_date, branch_number, branch_name, account_alias, value in rows
+    ]
+
+    # Un filtro por sucursal excluye por definición lo que no tiene sucursal.
+    if not filters.branch_ids:
+        source_query = (
+            session.query(
+                Movement.movement_date,
+                MovementCategory.name,
+                BankAccount.alias,
+                value_column,
+            )
+            .join(MovementCategory, Movement.category_id == MovementCategory.id)
+            .join(BankAccount, Movement.bank_account_id == BankAccount.id)
+            .filter(
+                Movement.branch_id.is_(None),
+                MovementCategory.code.in_(DEPOSIT_SOURCE_CATEGORIES),
+            )
+        )
+        source_query = _apply_common_filters(source_query, filters, joined_account=True)
+        source_rows = source_query.group_by(
+            Movement.movement_date, MovementCategory.name, BankAccount.alias
+        ).all()
+        # Evita columnas y filas vacías (p. ej. Uber en modo "Cargo").
+        labeled_rows.extend(row for row in source_rows if int(row[3]) != 0)
+
     account_aliases: list[str] = []
     days: dict[dt.date, dict[str, ConsolidatedBranchRow]] = {}
 
-    for movement_date, branch_number, branch_name, account_alias, value in rows:
+    for movement_date, branch_label, account_alias, value in labeled_rows:
         if account_alias not in account_aliases:
             account_aliases.append(account_alias)
 
-        branch_label = f"{branch_number}. {branch_name}"
         day_branches = days.setdefault(movement_date, {})
         branch_row = day_branches.setdefault(
             branch_label, ConsolidatedBranchRow(branch_label=branch_label)
@@ -484,6 +518,67 @@ def branch_day_pivot(
 
     days.sort()
     return BranchDayPivotReport(days=days, branch_rows=branch_rows)
+
+
+# ---------------------------------------------------------------------------
+# 10. Reporte por cuentas (día × cuenta)
+# ---------------------------------------------------------------------------
+ACCOUNT_REPORT_ALIASES = ["BBVA", "MIFEL", "MIFEL2"]
+
+
+@dataclass
+class DayAccountRow:
+    day: dt.date
+    values_by_account: dict[str, int] = field(default_factory=dict)
+
+    @property
+    def total_cents(self) -> int:
+        return sum(self.values_by_account.values())
+
+
+@dataclass
+class DayAccountReport:
+    account_aliases: list[str] = field(default_factory=lambda: list(ACCOUNT_REPORT_ALIASES))
+    rows: list[DayAccountRow] = field(default_factory=list)
+
+    @property
+    def totals_by_account(self) -> dict[str, int]:
+        totals = {alias: 0 for alias in self.account_aliases}
+        for row in self.rows:
+            for alias, value in row.values_by_account.items():
+                totals[alias] = totals.get(alias, 0) + value
+        return totals
+
+    @property
+    def grand_total_cents(self) -> int:
+        return sum(row.total_cents for row in self.rows)
+
+
+def day_account_report(
+    session: Session,
+    filters: ReportFilter,
+    value_type: ReportValueType = ReportValueType.PAYMENT,
+) -> DayAccountReport:
+    """Una fila por día y una columna por cuenta (BBVA, MIFEL y MIFEL2),
+    incluyendo todos los movimientos, con o sin sucursal identificada."""
+    value_column = _value_column(value_type)
+    query = (
+        session.query(Movement.movement_date, BankAccount.alias, value_column)
+        .join(BankAccount, Movement.bank_account_id == BankAccount.id)
+        .filter(BankAccount.alias.in_(ACCOUNT_REPORT_ALIASES))
+    )
+    query = _apply_common_filters(query, filters, joined_account=True)
+    rows = (
+        query.group_by(Movement.movement_date, BankAccount.alias)
+        .order_by(Movement.movement_date)
+        .all()
+    )
+
+    by_day: dict[dt.date, DayAccountRow] = {}
+    for movement_date, alias, value in rows:
+        day_row = by_day.setdefault(movement_date, DayAccountRow(day=movement_date))
+        day_row.values_by_account[alias] = int(value)
+    return DayAccountReport(rows=[by_day[day] for day in sorted(by_day)])
 
 
 def movements_for_branch_day(
