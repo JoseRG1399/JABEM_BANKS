@@ -5,8 +5,7 @@ import datetime as dt
 import html as html_lib
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QPageLayout, QTextDocument
-from PySide6.QtPrintSupport import QPrintPreviewDialog, QPrinter
+from PySide6.QtGui import QTextDocument
 from PySide6.QtWidgets import (
     QComboBox,
     QDateEdit,
@@ -27,6 +26,7 @@ from app.config import Config
 from app.integrations.store_api import StoreApiClient, resolve_api_host
 from app.services import store_report_service as svc
 from app.ui.widgets.loading_overlay import LoadingOverlay
+from app.ui.widgets.print_preview import show_print_preview
 from app.ui.workers.store_api_worker import StoreApiWorker
 from app.utils.dates import format_date_for_display
 from app.utils.money import format_currency
@@ -318,12 +318,7 @@ class StoresPage(QWidget):
         document = QTextDocument()
         document.setHtml(PRINT_STYLE + _header_html(self._current_title, date_from, date_to) + body)
 
-        printer = QPrinter(QPrinter.PrinterMode.HighResolution)
-        printer.setPageOrientation(QPageLayout.Orientation.Landscape)
-        preview = QPrintPreviewDialog(printer, self)
-        preview.setWindowTitle(f"Vista previa de impresión — {self._current_title}")
-        preview.paintRequested.connect(document.print_)
-        preview.exec()
+        show_print_preview(self, document, self._current_title)
 
     # ------------------------------------------------------------------
     @staticmethod

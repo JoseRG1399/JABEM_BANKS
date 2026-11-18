@@ -6,8 +6,7 @@ import datetime as dt
 import html as html_lib
 from pathlib import Path
 
-from PySide6.QtGui import QPageLayout, QTextDocument
-from PySide6.QtPrintSupport import QPrintPreviewDialog, QPrinter
+from PySide6.QtGui import QTextDocument
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -39,6 +38,7 @@ from app.ui.dialogs.movement_detail_dialog import MovementDetailDialog
 from app.ui.widgets.delete_movements import confirm_and_delete_movements
 from app.ui.widgets.filter_bar import FilterBar
 from app.ui.widgets.pagination import Pagination
+from app.ui.widgets.print_preview import show_print_preview
 from app.utils.dates import format_date_for_display
 from app.utils.money import format_currency, parse_money
 
@@ -556,12 +556,7 @@ class MovementsPage(QWidget):
 
         document = QTextDocument()
         document.setHtml(MOVEMENTS_PRINT_STYLE + body)
-        printer = QPrinter(QPrinter.PrinterMode.HighResolution)
-        printer.setPageOrientation(QPageLayout.Orientation.Landscape)
-        preview = QPrintPreviewDialog(printer, self)
-        preview.setWindowTitle("Vista previa de impresión — Reporte de movimientos")
-        preview.paintRequested.connect(document.print_)
-        preview.exec()
+        show_print_preview(self, document, "Reporte de movimientos")
 
     def _on_row_double_clicked(self, row: int, _column: int) -> None:
         if row >= len(self._row_movement_ids):

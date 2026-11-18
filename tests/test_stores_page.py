@@ -71,3 +71,14 @@ def test_transfers_print_html():
     )
     html = transfers_report_html(report)
     assert "Torres" in html and "$82.00" in html and "Resumen por sucursal" in html
+
+
+def test_print_preview_opens_maximized(qapp):
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QTextDocument
+
+    from app.ui.widgets.print_preview import create_print_preview
+
+    preview = create_print_preview(None, QTextDocument(), "Prueba")
+    assert preview.windowState() & Qt.WindowState.WindowMaximized
+    assert "Prueba" in preview.windowTitle()

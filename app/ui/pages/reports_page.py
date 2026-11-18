@@ -6,8 +6,7 @@ import html as html_lib
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont, QPageLayout, QTextDocument
-from PySide6.QtPrintSupport import QPrintPreviewDialog, QPrinter
+from PySide6.QtGui import QFont, QTextDocument
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -43,6 +42,7 @@ from app.services.report_service import (
     ReportRow,
     ReportValueType,
 )
+from app.ui.widgets.print_preview import show_print_preview
 from app.ui.widgets.multi_select_combo import MultiSelectComboBox
 from app.utils.dates import format_date_for_display
 from app.utils.money import format_currency
@@ -793,12 +793,7 @@ class ReportsPage(QWidget):
         document = QTextDocument()
         document.setHtml(REPORT_PRINT_STYLE + self._report_header_html() + body_html)
 
-        printer = QPrinter(QPrinter.PrinterMode.HighResolution)
-        printer.setPageOrientation(QPageLayout.Orientation.Landscape)
-        preview = QPrintPreviewDialog(printer, self)
-        preview.setWindowTitle(f"Vista previa de impresión — {self._current_title}")
-        preview.paintRequested.connect(document.print_)
-        preview.exec()
+        show_print_preview(self, document, self._current_title)
 
     def _report_header_html(self) -> str:
         title = html_lib.escape(self._current_title or "Reporte")
