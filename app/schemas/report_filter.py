@@ -11,5 +11,6 @@ class ReportFilter:
     date_to: dt.date | None = None
     bank_id: int | None = None
     bank_account_id: int | None = None
-    branch_id: int | None = None
+    branch_ids: list[int] | None = None
     category_id: int | None = None
+    category_ids: list[int] | None = None

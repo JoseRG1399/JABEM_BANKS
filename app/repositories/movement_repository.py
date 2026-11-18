@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from sqlalchemy import func
 from sqlalchemy.orm import Query, Session, joinedload
 
-from app.models import BankAccount, Movement
+from app.models import BankAccount, Movement, MovementClassificationHistory
 
 
 class MovementRepository:
@@ -38,6 +38,27 @@ class MovementRepository:
 
     def get_by_id(self, movement_id: int) -> Movement | None:
         return self.session.get(Movement, movement_id)
+
+    def delete_by_ids(self, movement_ids: list[int]) -> int:
+        """Elimina movimientos junto con su historial de clasificación.
+
+        Los movimientos derivados de una división conservan su fila pero pierden
+        la referencia al origen eliminado.
+        """
+        if not movement_ids:
+            return 0
+        self.session.query(Movement).filter(
+            Movement.split_from_movement_id.in_(movement_ids)
+        ).update({Movement.split_from_movement_id: None}, synchronize_session=False)
+        self.session.query(MovementClassificationHistory).filter(
+            MovementClassificationHistory.movement_id.in_(movement_ids)
+        ).delete(synchronize_session=False)
+        deleted = (
+            self.session.query(Movement)
+            .filter(Movement.id.in_(movement_ids))
+            .delete(synchronize_session=False)
+        )
+        return deleted
 
     # ------------------------------------------------------------------
     # Agregados para el dashboard

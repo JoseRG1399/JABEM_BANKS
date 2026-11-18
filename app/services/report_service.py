@@ -8,10 +8,10 @@ pandas cuando sea posible").
 from __future__ import annotations
 
 import datetime as dt
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Query, Session
 
 from app.constants import CategoryCode
@@ -30,6 +30,7 @@ class ReportRow:
     label: str
     charge_cents: int = 0
     payment_cents: int = 0
+    key_id: int | None = None  # id de la entidad agrupada (p. ej. categoría), para el detalle
 
     @property
     def net_cents(self) -> int:
@@ -49,10 +50,12 @@ def _apply_common_filters(query: Query, filters: ReportFilter, joined_account: b
         )
     elif filters.bank_id and joined_account:
         query = query.filter(BankAccount.bank_id == filters.bank_id)
-    if filters.branch_id:
-        query = query.filter(Movement.branch_id == filters.branch_id)
+    if filters.branch_ids:
+        query = query.filter(Movement.branch_id.in_(filters.branch_ids))
     if filters.category_id:
         query = query.filter(Movement.category_id == filters.category_id)
+    if filters.category_ids:
+        query = query.filter(Movement.category_id.in_(filters.category_ids))
     return query
 
 
@@ -61,6 +64,17 @@ def _sums() -> tuple:
         func.coalesce(func.sum(Movement.charge_cents), 0),
         func.coalesce(func.sum(Movement.payment_cents), 0),
     )
+
+
+def _excluding_categories(query: Query, codes: list[str]) -> Query:
+    """Descarta movimientos cuya categoría esté en ``codes``.
+
+    Los movimientos sin categoría asignada se conservan: el filtro solo
+    excluye coincidencias explícitas.
+    """
+    return query.outerjoin(
+        MovementCategory, Movement.category_id == MovementCategory.id
+    ).filter(or_(MovementCategory.code.is_(None), MovementCategory.code.notin_(codes)))
 
 
 # ---------------------------------------------------------------------------
@@ -81,11 +95,17 @@ def totals_by_day(session: Session, filters: ReportFilter) -> list[ReportRow]:
 # 2. Totales por banco
 # ---------------------------------------------------------------------------
 def totals_by_bank(session: Session, filters: ReportFilter) -> list[ReportRow]:
+    """Totales por banco, sin contar devoluciones de IVA ni traspasos: esos
+    movimientos no reflejan actividad real del negocio y distorsionarían el
+    total (sección 15.8)."""
     charge_sum, payment_sum = _sums()
     query = (
         session.query(Bank.name, charge_sum, payment_sum)
         .join(BankAccount, BankAccount.bank_id == Bank.id)
         .join(Movement, Movement.bank_account_id == BankAccount.id)
+    )
+    query = _excluding_categories(
+        query, [CategoryCode.VAT_REFUND.value, CategoryCode.TRANSFER.value]
     )
     query = _apply_common_filters(query, filters, joined_account=True)
     rows = query.group_by(Bank.name).order_by(Bank.name).all()
@@ -137,18 +157,35 @@ def totals_by_branch(session: Session, filters: ReportFilter) -> list[ReportRow]
 def totals_by_category(session: Session, filters: ReportFilter) -> list[ReportRow]:
     charge_sum, payment_sum = _sums()
     query = session.query(
-        MovementCategory.report_order, MovementCategory.name, charge_sum, payment_sum
+        MovementCategory.report_order,
+        MovementCategory.id,
+        MovementCategory.name,
+        charge_sum,
+        payment_sum,
     ).join(Movement, Movement.category_id == MovementCategory.id)
     query = _apply_common_filters(query, filters)
     rows = (
-        query.group_by(MovementCategory.report_order, MovementCategory.name)
+        query.group_by(MovementCategory.report_order, MovementCategory.id, MovementCategory.name)
         .order_by(MovementCategory.report_order)
         .all()
     )
     return [
-        ReportRow(label=name, charge_cents=int(charge), payment_cents=int(payment))
-        for _order, name, charge, payment in rows
+        ReportRow(
+            label=name, charge_cents=int(charge), payment_cents=int(payment), key_id=category_id
+        )
+        for _order, category_id, name, charge, payment in rows
     ]
+
+
+def movements_for_category(
+    session: Session, filters: ReportFilter, category_id: int
+) -> list[Movement]:
+    """Movimientos que componen el total de una categoría en el periodo filtrado,
+    en orden cronológico y de importación."""
+    detail_filters = replace(filters, category_id=category_id)
+    query = session.query(Movement).join(BankAccount, Movement.bank_account_id == BankAccount.id)
+    query = _apply_common_filters(query, detail_filters, joined_account=True)
+    return query.order_by(Movement.movement_date, Movement.id).all()
 
 
 # ---------------------------------------------------------------------------
@@ -189,6 +226,76 @@ def commissions_and_vat(session: Session, filters: ReportFilter) -> list[ReportR
         ReportRow(label=name, charge_cents=int(charge), payment_cents=int(payment))
         for name, charge, payment in rows
     ]
+
+
+# ---------------------------------------------------------------------------
+# 7b. Comisiones ponderadas por banco
+# ---------------------------------------------------------------------------
+@dataclass
+class BankCommissionRow:
+    bank_name: str
+    commission_cents: int = 0
+    vat_cents: int = 0
+    weight: float = 0.0  # fracción (0-1) del total de comisiones de todos los bancos
+
+    @property
+    def total_cents(self) -> int:
+        return self.commission_cents + self.vat_cents
+
+
+@dataclass
+class BankCommissionReport:
+    rows: list[BankCommissionRow] = field(default_factory=list)
+
+    @property
+    def commission_cents(self) -> int:
+        return sum(row.commission_cents for row in self.rows)
+
+    @property
+    def vat_cents(self) -> int:
+        return sum(row.vat_cents for row in self.rows)
+
+    @property
+    def total_cents(self) -> int:
+        return sum(row.total_cents for row in self.rows)
+
+
+def commissions_weighted_by_bank(
+    session: Session, filters: ReportFilter
+) -> BankCommissionReport:
+    """Comisiones e IVA de comisiones por banco, con el peso (%) de cada banco
+    sobre el total de comisiones. Los importes son netos (cargo - abono) para
+    que una bonificación de comisión reste en lugar de sumar.
+    """
+    net = func.coalesce(func.sum(Movement.charge_cents - Movement.payment_cents), 0)
+    query = (
+        session.query(Bank.name, MovementCategory.code, net)
+        .join(BankAccount, BankAccount.bank_id == Bank.id)
+        .join(Movement, Movement.bank_account_id == BankAccount.id)
+        .join(MovementCategory, Movement.category_id == MovementCategory.id)
+        .filter(
+            MovementCategory.code.in_(
+                [CategoryCode.COMMISSION.value, CategoryCode.COMMISSION_VAT.value]
+            )
+        )
+    )
+    query = _apply_common_filters(query, filters, joined_account=True)
+    rows = query.group_by(Bank.name, MovementCategory.code).order_by(Bank.name).all()
+
+    by_bank: dict[str, BankCommissionRow] = {}
+    for bank_name, code, amount in rows:
+        bank_row = by_bank.setdefault(bank_name, BankCommissionRow(bank_name=bank_name))
+        if code == CategoryCode.COMMISSION_VAT.value:
+            bank_row.vat_cents += int(amount)
+        else:
+            bank_row.commission_cents += int(amount)
+
+    report = BankCommissionReport(rows=list(by_bank.values()))
+    grand_total = report.total_cents
+    if grand_total:
+        for bank_row in report.rows:
+            bank_row.weight = bank_row.total_cents / grand_total
+    return report
 
 
 # ---------------------------------------------------------------------------
@@ -240,6 +347,15 @@ class ConsolidatedReport:
         return sum(day_group.total_cents for day_group in self.day_groups)
 
 
+# Categorías de ingreso que no pertenecen a una sucursal pero sí deben verse en
+# la conciliación de depósitos (cuenta MIFEL2).
+DEPOSIT_SOURCE_CATEGORIES = [
+    CategoryCode.UBER.value,
+    CategoryCode.CLIP.value,
+    CategoryCode.STRIPE.value,
+]
+
+
 def _value_column(value_type: ReportValueType):
     if value_type == ReportValueType.CHARGE:
         return func.coalesce(func.sum(Movement.charge_cents), 0)
@@ -253,8 +369,10 @@ def consolidated_by_date_branch_account(
     filters: ReportFilter,
     value_type: ReportValueType = ReportValueType.PAYMENT,
 ) -> ConsolidatedReport:
-    """Reporte tipo tabla dinámica: solo incluye movimientos con sucursal
-    identificada (es el reporte de conciliación de depósitos por sucursal).
+    """Reporte tipo tabla dinámica: incluye movimientos con sucursal
+    identificada (es el reporte de conciliación de depósitos por sucursal) y,
+    como filas propias, los de las categorías de ingreso sin sucursal
+    (``DEPOSIT_SOURCE_CATEGORIES``, p. ej. Uber y Clip de la cuenta MIFEL2).
     """
     value_column = _value_column(value_type)
 
@@ -276,14 +394,41 @@ def consolidated_by_date_branch_account(
         .all()
     )
 
+    labeled_rows = [
+        (movement_date, f"{branch_number}. {branch_name}", account_alias, value)
+        for movement_date, branch_number, branch_name, account_alias, value in rows
+    ]
+
+    # Un filtro por sucursal excluye por definición lo que no tiene sucursal.
+    if not filters.branch_ids:
+        source_query = (
+            session.query(
+                Movement.movement_date,
+                MovementCategory.name,
+                BankAccount.alias,
+                value_column,
+            )
+            .join(MovementCategory, Movement.category_id == MovementCategory.id)
+            .join(BankAccount, Movement.bank_account_id == BankAccount.id)
+            .filter(
+                Movement.branch_id.is_(None),
+                MovementCategory.code.in_(DEPOSIT_SOURCE_CATEGORIES),
+            )
+        )
+        source_query = _apply_common_filters(source_query, filters, joined_account=True)
+        source_rows = source_query.group_by(
+            Movement.movement_date, MovementCategory.name, BankAccount.alias
+        ).all()
+        # Evita columnas y filas vacías (p. ej. Uber en modo "Cargo").
+        labeled_rows.extend(row for row in source_rows if int(row[3]) != 0)
+
     account_aliases: list[str] = []
     days: dict[dt.date, dict[str, ConsolidatedBranchRow]] = {}
 
-    for movement_date, branch_number, branch_name, account_alias, value in rows:
+    for movement_date, branch_label, account_alias, value in labeled_rows:
         if account_alias not in account_aliases:
             account_aliases.append(account_alias)
 
-        branch_label = f"{branch_number}. {branch_name}"
         day_branches = days.setdefault(movement_date, {})
         branch_row = day_branches.setdefault(
             branch_label, ConsolidatedBranchRow(branch_label=branch_label)
@@ -303,3 +448,155 @@ def consolidated_by_date_branch_account(
     ]
 
     return ConsolidatedReport(account_aliases=account_aliases, day_groups=day_groups)
+
+
+# ---------------------------------------------------------------------------
+# 9. Tabla consolidada por sucursal y día (pivote)
+# ---------------------------------------------------------------------------
+@dataclass
+class BranchPivotRow:
+    branch_id: int
+    branch_label: str
+    values_by_day: dict[dt.date, int] = field(default_factory=dict)
+
+    @property
+    def total_cents(self) -> int:
+        return sum(self.values_by_day.values())
+
+
+@dataclass
+class BranchDayPivotReport:
+    days: list[dt.date] = field(default_factory=list)
+    branch_rows: list[BranchPivotRow] = field(default_factory=list)
+
+    @property
+    def totals_by_day(self) -> dict[dt.date, int]:
+        totals: dict[dt.date, int] = {day: 0 for day in self.days}
+        for branch_row in self.branch_rows:
+            for day, value in branch_row.values_by_day.items():
+                totals[day] = totals.get(day, 0) + value
+        return totals
+
+    @property
+    def grand_total_cents(self) -> int:
+        return sum(branch_row.total_cents for branch_row in self.branch_rows)
+
+
+def branch_day_pivot(
+    session: Session,
+    filters: ReportFilter,
+    value_type: ReportValueType = ReportValueType.PAYMENT,
+) -> BranchDayPivotReport:
+    """Variante en forma de pivote de la tabla consolidada: una fila por
+    sucursal y una columna por día (como la bitácora que antes se llenaba a
+    mano), sumando todas las cuentas bancarias en cada celda. Igual que el
+    consolidado, solo incluye movimientos con sucursal identificada.
+    """
+    value_column = _value_column(value_type)
+
+    query = session.query(
+        Branch.id, Branch.branch_number, Branch.name, Movement.movement_date, value_column
+    ).join(Branch, Movement.branch_id == Branch.id)
+    query = _apply_common_filters(query, filters)
+    rows = (
+        query.group_by(Branch.id, Branch.branch_number, Branch.name, Movement.movement_date)
+        .order_by(Branch.branch_number, Movement.movement_date)
+        .all()
+    )
+
+    days: list[dt.date] = []
+    branch_rows: list[BranchPivotRow] = []
+    branch_index: dict[int, BranchPivotRow] = {}
+
+    for branch_id, branch_number, branch_name, movement_date, value in rows:
+        if movement_date not in days:
+            days.append(movement_date)
+
+        branch_label = f"{branch_number}. {branch_name}"
+        branch_row = branch_index.get(branch_id)
+        if branch_row is None:
+            branch_row = BranchPivotRow(branch_id=branch_id, branch_label=branch_label)
+            branch_index[branch_id] = branch_row
+            branch_rows.append(branch_row)
+        branch_row.values_by_day[movement_date] = (
+            branch_row.values_by_day.get(movement_date, 0) + int(value)
+        )
+
+    days.sort()
+    return BranchDayPivotReport(days=days, branch_rows=branch_rows)
+
+
+# ---------------------------------------------------------------------------
+# 10. Reporte por cuentas (día × cuenta)
+# ---------------------------------------------------------------------------
+ACCOUNT_REPORT_ALIASES = ["BBVA", "MIFEL", "MIFEL2"]
+
+
+@dataclass
+class DayAccountRow:
+    day: dt.date
+    values_by_account: dict[str, int] = field(default_factory=dict)
+
+    @property
+    def total_cents(self) -> int:
+        return sum(self.values_by_account.values())
+
+
+@dataclass
+class DayAccountReport:
+    account_aliases: list[str] = field(default_factory=lambda: list(ACCOUNT_REPORT_ALIASES))
+    rows: list[DayAccountRow] = field(default_factory=list)
+
+    @property
+    def totals_by_account(self) -> dict[str, int]:
+        totals = {alias: 0 for alias in self.account_aliases}
+        for row in self.rows:
+            for alias, value in row.values_by_account.items():
+                totals[alias] = totals.get(alias, 0) + value
+        return totals
+
+    @property
+    def grand_total_cents(self) -> int:
+        return sum(row.total_cents for row in self.rows)
+
+
+def day_account_report(
+    session: Session,
+    filters: ReportFilter,
+    value_type: ReportValueType = ReportValueType.PAYMENT,
+) -> DayAccountReport:
+    """Una fila por día y una columna por cuenta (BBVA, MIFEL y MIFEL2),
+    incluyendo todos los movimientos, con o sin sucursal identificada."""
+    value_column = _value_column(value_type)
+    query = (
+        session.query(Movement.movement_date, BankAccount.alias, value_column)
+        .join(BankAccount, Movement.bank_account_id == BankAccount.id)
+        .filter(BankAccount.alias.in_(ACCOUNT_REPORT_ALIASES))
+    )
+    query = _apply_common_filters(query, filters, joined_account=True)
+    rows = (
+        query.group_by(Movement.movement_date, BankAccount.alias)
+        .order_by(Movement.movement_date)
+        .all()
+    )
+
+    by_day: dict[dt.date, DayAccountRow] = {}
+    for movement_date, alias, value in rows:
+        day_row = by_day.setdefault(movement_date, DayAccountRow(day=movement_date))
+        day_row.values_by_account[alias] = int(value)
+    return DayAccountReport(rows=[by_day[day] for day in sorted(by_day)])
+
+
+def movements_for_branch_day(
+    session: Session, filters: ReportFilter, branch_id: int, day: dt.date
+) -> list[Movement]:
+    """Detalle de los movimientos que forman una celda del pivote sucursal/día.
+
+    Se ordenan por ``id`` (orden de inserción) para que coincidan con el
+    orden consecutivo en el que se importaron, igual que en el archivo de
+    origen.
+    """
+    detail_filters = replace(filters, date_from=day, date_to=day, branch_ids=[branch_id])
+    query = session.query(Movement).join(BankAccount, Movement.bank_account_id == BankAccount.id)
+    query = _apply_common_filters(query, detail_filters, joined_account=True)
+    return query.order_by(Movement.id).all()

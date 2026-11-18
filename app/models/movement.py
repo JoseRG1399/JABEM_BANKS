@@ -25,6 +25,7 @@ class Movement(TimestampMixin, Base):
         Index("ix_movements_branch", "branch_id"),
         Index("ix_movements_category", "category_id"),
         Index("ix_movements_classification_status", "classification_status"),
+        Index("ix_movements_split_from_movement_id", "split_from_movement_id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -61,10 +62,21 @@ class Movement(TimestampMixin, Base):
     matched_identifier: Mapped[str | None] = mapped_column(String(100), nullable=True)
     source_row_number: Mapped[int] = mapped_column(Integer, nullable=False)
 
+    # Cuando una regla separa un cargo con IVA en dos movimientos (sección
+    # de domiciliaciones), este campo marca el movimiento de IVA generado
+    # automáticamente, apuntando al movimiento base del que se derivó. Sirve
+    # también para no volver a partirlo si la regla se vuelve a aplicar.
+    split_from_movement_id: Mapped[int | None] = mapped_column(
+        ForeignKey("movements.id"), nullable=True
+    )
+
     bank_account: Mapped["BankAccount"] = relationship()
     branch: Mapped["Branch | None"] = relationship()
     category: Mapped["MovementCategory | None"] = relationship()
     imported_file: Mapped["ImportedFile"] = relationship()
+    split_from_movement: Mapped["Movement | None"] = relationship(
+        remote_side=[id], foreign_keys=[split_from_movement_id]
+    )
 
     def __repr__(self) -> str:  # pragma: no cover
         return (

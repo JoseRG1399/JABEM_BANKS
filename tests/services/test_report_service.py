@@ -138,6 +138,53 @@ def test_totals_by_bank(db_session, scenario):
     assert totals["Mifel"] == 50000
 
 
+def test_totals_by_bank_excludes_vat_refund_and_transfers(db_session, scenario):
+    bbva = scenario["bbva"]
+    imported_file = db_session.query(ImportedFile).one()
+    vat_refund_category = db_session.query(MovementCategory).filter_by(code="VAT_REFUND").one()
+    transfer_category = db_session.query(MovementCategory).filter_by(code="TRANSFER").one()
+
+    db_session.add_all(
+        [
+            Movement(
+                bank_account_id=bbva.id,
+                category_id=vat_refund_category.id,
+                imported_file_id=imported_file.id,
+                movement_date=dt.date(2026, 7, 1),
+                description_original="DEVOLUCION IVA",
+                normalized_text="DEVOLUCION IVA",
+                payment_cents=9000,
+                movement_hash="vat-refund",
+                occurrence_number=1,
+                classification_status="CLASSIFIED",
+                classification_method="MANUAL",
+                source_row_number=1,
+            ),
+            Movement(
+                bank_account_id=bbva.id,
+                category_id=transfer_category.id,
+                imported_file_id=imported_file.id,
+                movement_date=dt.date(2026, 7, 1),
+                description_original="TRASPASO",
+                normalized_text="TRASPASO",
+                payment_cents=7000,
+                movement_hash="transfer",
+                occurrence_number=1,
+                classification_status="CLASSIFIED",
+                classification_method="MANUAL",
+                source_row_number=1,
+            ),
+        ]
+    )
+    db_session.flush()
+
+    rows = report_service.totals_by_bank(db_session, ReportFilter())
+    totals = {row.label: row.payment_cents for row in rows}
+    # BBVA sigue en 120000: la devolución de IVA y el traspaso quedan fuera.
+    assert totals["BBVA"] == 120000
+    assert totals["Mifel"] == 50000
+
+
 def test_totals_by_account(db_session, scenario):
     rows = report_service.totals_by_account(db_session, ReportFilter())
     totals = {row.label: row.payment_cents for row in rows}
@@ -150,6 +197,28 @@ def test_totals_by_branch(db_session, scenario):
     totals = {row.label: row.payment_cents for row in rows}
     assert totals["01. ALFREDO"] == 120000
     assert totals["02. COLON"] == 50000
+
+
+def test_totals_by_branch_filters_by_selected_branch_ids(db_session, scenario):
+    filters = ReportFilter(branch_ids=[scenario["branch_colon"].id])
+    rows = report_service.totals_by_branch(db_session, filters)
+    totals = {row.label: row.payment_cents for row in rows}
+    assert totals == {"02. COLON": 50000}
+
+    filters = ReportFilter(
+        branch_ids=[scenario["branch_alfredo"].id, scenario["branch_colon"].id]
+    )
+    rows = report_service.totals_by_branch(db_session, filters)
+    totals = {row.label: row.payment_cents for row in rows}
+    assert totals == {"01. ALFREDO": 120000, "02. COLON": 50000}
+
+
+def test_totals_by_category_filters_by_selected_category_ids(db_session, scenario):
+    all_rows = report_service.totals_by_category(db_session, ReportFilter())
+    ids = {row.label: row.key_id for row in all_rows}
+    filters = ReportFilter(category_ids=[ids["Sucursal"], ids["Comisiones"]])
+    rows = report_service.totals_by_category(db_session, filters)
+    assert {row.label for row in rows} == {"Sucursal", "Comisiones"}
 
 
 def test_totals_by_category(db_session, scenario):
@@ -172,6 +241,52 @@ def test_commissions_and_vat(db_session, scenario):
     assert totals["Comisiones"] == 15000
     assert totals["IVA comisiones"] == 2400
     assert len(rows) == 2
+
+
+def test_movements_for_category_matches_category_totals(db_session, scenario):
+    filters = ReportFilter()
+    rows = report_service.totals_by_category(db_session, filters)
+    assert rows
+    for row in rows:
+        assert row.key_id is not None
+        movements = report_service.movements_for_category(db_session, filters, row.key_id)
+        assert sum(m.charge_cents for m in movements) == row.charge_cents
+        assert sum(m.payment_cents for m in movements) == row.payment_cents
+
+
+def test_commissions_weighted_by_bank(db_session, scenario):
+    mifel = scenario["mifel"]
+    commission = db_session.query(MovementCategory).filter_by(code="COMMISSION").one()
+    imported_file = db_session.query(ImportedFile).one()
+    db_session.add(
+        Movement(
+            bank_account_id=mifel.id,
+            category_id=commission.id,
+            imported_file_id=imported_file.id,
+            movement_date=dt.date(2026, 7, 2),
+            description_original="COMISION",
+            normalized_text="COMISION",
+            charge_cents=5000,
+            payment_cents=0,
+            movement_hash="h-mifel-comm",
+            occurrence_number=1,
+            classification_status="CLASSIFIED",
+            classification_method="NONE",
+            source_row_number=1,
+        )
+    )
+    db_session.flush()
+
+    report = report_service.commissions_weighted_by_bank(db_session, ReportFilter())
+    by_bank = {row.bank_name: row for row in report.rows}
+    bbva = by_bank[scenario["bbva"].bank.name]
+    mifel_row = by_bank[mifel.bank.name]
+
+    assert (bbva.commission_cents, bbva.vat_cents, bbva.total_cents) == (15000, 2400, 17400)
+    assert (mifel_row.commission_cents, mifel_row.vat_cents) == (5000, 0)
+    assert report.total_cents == 22400
+    assert bbva.weight == pytest.approx(17400 / 22400)
+    assert sum(row.weight for row in report.rows) == pytest.approx(1.0)
 
 
 def test_report_filters_by_date_range(db_session, scenario):
@@ -215,3 +330,121 @@ def test_consolidated_report_excludes_movements_without_branch(db_session, scena
     total_branch_rows = sum(len(g.branch_rows) for g in report.day_groups)
     # Solo 3 movimientos del escenario tienen sucursal asignada.
     assert total_branch_rows == 3
+
+
+def test_consolidated_report_includes_uber_clip_deposits_without_branch(db_session, scenario):
+    mifel2 = db_session.query(BankAccount).filter_by(alias="MIFEL2").one()
+    imported_file = db_session.query(ImportedFile).one()
+    uber = db_session.query(MovementCategory).filter_by(code="UBER").one()
+
+    db_session.add(
+        Movement(
+            bank_account_id=mifel2.id,
+            branch_id=None,
+            category_id=uber.id,
+            imported_file_id=imported_file.id,
+            movement_date=dt.date(2026, 7, 1),
+            description_original="UBRPAGOSMEXICO",
+            normalized_text="UBRPAGOSMEXICO",
+            payment_cents=30000,
+            movement_hash="h-uber",
+            occurrence_number=1,
+            classification_status="CLASSIFIED",
+            classification_method="SPECIAL_RULE",
+            source_row_number=1,
+        )
+    )
+    db_session.flush()
+
+    report = report_service.consolidated_by_date_branch_account(db_session, ReportFilter())
+    assert report.account_aliases == ["BBVA", "MIFEL", "MIFEL2"]
+    day1 = next(g for g in report.day_groups if g.day == dt.date(2026, 7, 1))
+    assert day1.values_by_account["MIFEL2"] == 30000
+    assert day1.total_cents == 180000
+    assert any(row.branch_label == "Uber" for row in day1.branch_rows)
+
+    charge_report = report_service.consolidated_by_date_branch_account(
+        db_session, ReportFilter(), value_type=ReportValueType.CHARGE
+    )
+    assert "MIFEL2" not in charge_report.account_aliases
+
+    branch_filtered = report_service.consolidated_by_date_branch_account(
+        db_session, ReportFilter(branch_ids=[scenario["branch_alfredo"].id])
+    )
+    assert "MIFEL2" not in branch_filtered.account_aliases
+
+
+def test_branch_day_pivot_structure(db_session, scenario):
+    report = report_service.branch_day_pivot(db_session, ReportFilter())
+
+    assert report.days == [dt.date(2026, 7, 1), dt.date(2026, 7, 2)]
+
+    alfredo = next(row for row in report.branch_rows if row.branch_label == "01. ALFREDO")
+    assert alfredo.values_by_day[dt.date(2026, 7, 1)] == 100000
+    assert alfredo.values_by_day[dt.date(2026, 7, 2)] == 20000
+    assert alfredo.total_cents == 120000
+
+    colon = next(row for row in report.branch_rows if row.branch_label == "02. COLON")
+    assert colon.values_by_day == {dt.date(2026, 7, 1): 50000}
+    assert colon.total_cents == 50000
+
+    assert report.totals_by_day[dt.date(2026, 7, 1)] == 150000
+    assert report.totals_by_day[dt.date(2026, 7, 2)] == 20000
+    assert report.grand_total_cents == 170000
+
+
+def test_branch_day_pivot_excludes_movements_without_branch(db_session, scenario):
+    report = report_service.branch_day_pivot(db_session, ReportFilter())
+    total_cells = sum(len(row.values_by_day) for row in report.branch_rows)
+    # Solo 3 movimientos del escenario tienen sucursal asignada.
+    assert total_cells == 3
+
+
+def test_day_account_report_structure(db_session, scenario):
+    report = report_service.day_account_report(db_session, ReportFilter())
+    assert report.account_aliases == ["BBVA", "MIFEL", "MIFEL2"]
+    assert [row.day for row in report.rows] == [
+        dt.date(2026, 7, 1),
+        dt.date(2026, 7, 2),
+        dt.date(2026, 7, 3),
+    ]
+    assert report.rows[0].values_by_account == {"BBVA": 100000, "MIFEL": 50000}
+    assert report.rows[1].values_by_account == {"BBVA": 20000}
+    assert report.totals_by_account == {"BBVA": 120000, "MIFEL": 50000, "MIFEL2": 0}
+    assert report.grand_total_cents == 170000
+
+
+def test_day_account_report_value_type_charge(db_session, scenario):
+    report = report_service.day_account_report(db_session, ReportFilter(), ReportValueType.CHARGE)
+    assert report.totals_by_account["BBVA"] == 17400
+    assert report.totals_by_account["MIFEL"] == 5000
+
+
+def test_consolidated_report_includes_stripe_deposits_without_branch(db_session, scenario):
+    mifel2 = db_session.query(BankAccount).filter_by(alias="MIFEL2").one()
+    imported_file = db_session.query(ImportedFile).one()
+    stripe = db_session.query(MovementCategory).filter_by(code="STRIPE").one()
+
+    db_session.add(
+        Movement(
+            bank_account_id=mifel2.id,
+            branch_id=None,
+            category_id=stripe.id,
+            imported_file_id=imported_file.id,
+            movement_date=dt.date(2026, 7, 1),
+            description_original="Stripe",
+            normalized_text="STRIPE",
+            payment_cents=9234,
+            movement_hash="h-stripe",
+            occurrence_number=1,
+            classification_status="CLASSIFIED",
+            classification_method="SPECIAL_RULE",
+            source_row_number=1,
+        )
+    )
+    db_session.flush()
+
+    report = report_service.consolidated_by_date_branch_account(db_session, ReportFilter())
+    day1 = next(g for g in report.day_groups if g.day == dt.date(2026, 7, 1))
+    assert day1.values_by_account["MIFEL2"] == 9234
+    assert any(row.branch_label == "Stripe" for row in day1.branch_rows)

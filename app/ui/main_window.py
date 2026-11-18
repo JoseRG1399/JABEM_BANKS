@@ -12,6 +12,7 @@ from app.ui.pages.movements_page import MovementsPage
 from app.ui.pages.reports_page import ReportsPage
 from app.ui.pages.rules_page import RulesPage
 from app.ui.pages.settings_page import SettingsPage
+from app.ui.pages.stores_page import StoresPage
 from app.ui.pages.unclassified_page import UnclassifiedPage
 from app.ui.widgets.sidebar import Sidebar
 
@@ -47,6 +48,7 @@ class MainWindow(QMainWindow):
         self._register_page("branches", BranchesPage(database))
         self._register_page("rules", RulesPage(database))
         self._register_page("reports", ReportsPage(config, database))
+        self._register_page("stores", StoresPage(config))
         self._register_page("settings", SettingsPage(config, database))
 
         self._sidebar.navigate.connect(self._on_navigate)

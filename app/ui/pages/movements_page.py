@@ -3,8 +3,10 @@ detalle y exportación a Excel del resultado filtrado."""
 from __future__ import annotations
 
 import datetime as dt
+import html as html_lib
 from pathlib import Path
 
+from PySide6.QtGui import QTextDocument
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -24,6 +26,7 @@ from PySide6.QtWidgets import (
 from app.config import Config
 from app.constants import ClassificationStatus
 from app.database.session import Database
+from app.models import ImportedFile
 from app.repositories.bank_repository import BankRepository
 from app.repositories.branch_repository import BranchRepository
 from app.repositories.category_repository import CategoryRepository
@@ -32,8 +35,10 @@ from app.repositories.movement_repository import MovementFilter, MovementReposit
 from app.services import export_service
 from app.ui.dialogs.classify_movement_dialog import ClassifyMovementDialog
 from app.ui.dialogs.movement_detail_dialog import MovementDetailDialog
+from app.ui.widgets.delete_movements import confirm_and_delete_movements
 from app.ui.widgets.filter_bar import FilterBar
 from app.ui.widgets.pagination import Pagination
+from app.ui.widgets.print_preview import show_print_preview
 from app.utils.dates import format_date_for_display
 from app.utils.money import format_currency, parse_money
 
@@ -50,6 +55,20 @@ COLUMNS = [
     "Clasificación",
     "Archivo",
 ]
+
+PRINT_OMITTED_COLUMNS = {"Banco", "Saldo", "Clasificación", "Archivo"}
+
+MOVEMENTS_PRINT_STYLE = """
+<style>
+    body { font-family: Arial, sans-serif; font-size: 11pt; color: #000000; }
+    h1 { font-size: 14pt; margin-top: 0; margin-bottom: 4px; }
+    .filters { font-size: 9pt; color: #333333; margin-bottom: 8px; }
+    table { border-collapse: collapse; width: 100%; margin-top: 8px; }
+    th, td { border: 1px solid #000000; padding: 3px 5px; text-align: right; font-size: 8pt; }
+    th { background-color: #dddddd; text-align: center; font-weight: bold; }
+    td.label { text-align: left; }
+</style>
+"""
 
 STATUS_LABELS = {
     "CLASSIFIED": "Clasificado",
@@ -77,7 +96,7 @@ class MovementsPage(QWidget):
         outer.setContentsMargins(24, 24, 24, 24)
         outer.setSpacing(12)
 
-        title = QLabel("Movimientos")
+        title = QLabel("Reporte de movimientos")
         title.setObjectName("appTitle")
         outer.addWidget(title)
 
@@ -87,7 +106,7 @@ class MovementsPage(QWidget):
 
         self._date_from = QDateEdit(calendarPopup=True)
         self._date_from.setDisplayFormat("dd/MM/yyyy")
-        self._date_from.setDate(dt.date(2000, 1, 1))
+        self._date_from.setDate(dt.date.today())
         self._filter_bar.add_field("Fecha inicial", self._date_from)
 
         self._date_to = QDateEdit(calendarPopup=True)
@@ -148,6 +167,22 @@ class MovementsPage(QWidget):
         self._reclassify_button.setEnabled(False)
         self._reclassify_button.clicked.connect(self._on_reclassify_selected)
         selection_row.addWidget(self._reclassify_button)
+
+        self._delete_button = QPushButton("Eliminar seleccionados")
+        self._delete_button.setObjectName("dangerButton")
+        self._delete_button.setEnabled(False)
+        self._delete_button.clicked.connect(self._on_delete_selected)
+        selection_row.addWidget(self._delete_button)
+
+        print_button = QPushButton("Imprimir")
+        print_button.setObjectName("infoButton")
+        print_button.clicked.connect(self._on_print)
+        selection_row.addWidget(print_button)
+
+        export_button = QPushButton("Exportar Excel")
+        export_button.setObjectName("successButton")
+        export_button.clicked.connect(self._on_export)
+        selection_row.addWidget(export_button)
         outer.addLayout(selection_row)
 
         self._table = QTableWidget(0, len(COLUMNS))
@@ -167,10 +202,6 @@ class MovementsPage(QWidget):
         self._totals_label.setObjectName("cardLabel")
         footer.addWidget(self._totals_label)
         footer.addStretch()
-
-        export_button = QPushButton("Exportar Excel")
-        export_button.clicked.connect(self._on_export)
-        footer.addWidget(export_button)
         outer.addLayout(footer)
 
         default_page_size = self._config.settings.rows_per_page if self._config else None
@@ -269,13 +300,59 @@ class MovementsPage(QWidget):
             return None
         return int(value * 100)
 
+    def _filter_conflict(self, filters: MovementFilter) -> str | None:
+        """Devuelve el motivo si la combinación de filtros no puede dar resultados."""
+        if filters.date_from and filters.date_to and filters.date_from > filters.date_to:
+            return "La fecha inicial no puede ser posterior a la fecha final."
+
+        low, high = filters.min_amount_cents, filters.max_amount_cents
+        if low is not None and high is not None and low > high:
+            return "El importe mínimo no puede ser mayor que el importe máximo."
+
+        category_label = self._category_combo.currentText()
+        if filters.category_id is not None:
+            is_unclassified_category = category_label == "No clasificado"
+            if filters.classification_status in ("CLASSIFIED", "MANUAL") and is_unclassified_category:
+                return (
+                    "La categoría «No clasificado» no puede combinarse con el estado "
+                    "Clasificado o Manual."
+                )
+            if filters.classification_status == "UNCLASSIFIED" and not is_unclassified_category:
+                return (
+                    "El estado «No clasificado» solo puede combinarse con la categoría "
+                    "«No clasificado»."
+                )
+
+        if filters.imported_file_id is not None and (
+            filters.bank_account_id is not None or filters.bank_id is not None
+        ):
+            with self._database.session_scope() as session:
+                imported_file = session.get(ImportedFile, filters.imported_file_id)
+                account = imported_file.bank_account if imported_file else None
+                if account is not None:
+                    if filters.bank_account_id is not None and account.id != filters.bank_account_id:
+                        return "El archivo importado seleccionado pertenece a otra cuenta."
+                    if filters.bank_id is not None and account.bank_id != filters.bank_id:
+                        return "El archivo importado seleccionado pertenece a otro banco."
+        return None
+
+    def _validated_filters(self) -> MovementFilter | None:
+        filters = self._current_filters()
+        conflict = self._filter_conflict(filters)
+        if conflict:
+            QMessageBox.warning(self, "Filtros incompatibles", conflict)
+            return None
+        return filters
+
     def _on_search(self) -> None:
+        if self._validated_filters() is None:
+            return
         self._current_page = 1
         self._pagination.reset()
         self._load_page()
 
     def _on_clear_filters(self) -> None:
-        self._date_from.setDate(dt.date(2000, 1, 1))
+        self._date_from.setDate(dt.date.today())
         self._date_to.setDate(dt.date.today())
         self._bank_combo.setCurrentIndex(0)
         self._account_combo.setCurrentIndex(0)
@@ -376,6 +453,14 @@ class MovementsPage(QWidget):
         count = len(self._selected_movement_ids())
         self._selection_label.setText(f"{count} movimiento(s) seleccionado(s)")
         self._reclassify_button.setEnabled(count > 0)
+        self._delete_button.setEnabled(count > 0)
+
+    def _on_delete_selected(self) -> None:
+        movement_ids = self._selected_movement_ids()
+        if not movement_ids:
+            return
+        if confirm_and_delete_movements(self, self._database, movement_ids) is not None:
+            self._load_page()
 
     def _on_reclassify_selected(self) -> None:
         movement_ids = self._selected_movement_ids()
@@ -386,7 +471,9 @@ class MovementsPage(QWidget):
             self._load_page()
 
     def _on_export(self) -> None:
-        filters = self._current_filters()
+        filters = self._validated_filters()
+        if filters is None:
+            return
         with self._database.session_scope() as session:
             repo = MovementRepository(session)
             movements = repo.list_all_filtered(filters)
@@ -414,6 +501,62 @@ class MovementsPage(QWidget):
                 return
 
         QMessageBox.information(self, "Exportación completa", "Los movimientos se exportaron correctamente.")
+
+    def _on_print(self) -> None:
+        filters = self._validated_filters()
+        if filters is None:
+            return
+        with self._database.session_scope() as session:
+            movements = MovementRepository(session).list_all_filtered(filters)
+            if not movements:
+                QMessageBox.warning(self, "Sin datos", "No hay movimientos para imprimir con estos filtros.")
+                return
+
+            print_columns = [
+                col for col in COLUMNS if col not in PRINT_OMITTED_COLUMNS
+            ]
+            header_html = "".join(f"<th>{html_lib.escape(col)}</th>" for col in print_columns)
+            money_cols = {print_columns.index("Cargo"), print_columns.index("Abono")}
+            rows_html = []
+            total_charge = total_payment = 0
+            for movement in movements:
+                total_charge += movement.charge_cents or 0
+                total_payment += movement.payment_cents or 0
+                values = [
+                    format_date_for_display(movement.movement_date),
+                    movement.bank_account.alias if movement.bank_account else "",
+                    movement.branch.name if movement.branch else "—",
+                    movement.category.name if movement.category else "—",
+                    movement.description_original,
+                    format_currency(movement.charge_cents) if movement.charge_cents else "",
+                    format_currency(movement.payment_cents) if movement.payment_cents else "",
+                ]
+                cells = "".join(
+                    ("<td>" if i in money_cols else '<td class="label">')
+                    + html_lib.escape(v)
+                    + "</td>"
+                    for i, v in enumerate(values)
+                )
+                rows_html.append(f"<tr>{cells}</tr>")
+            count = len(movements)
+
+        printed_at = dt.datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+        period = (
+            f"Del {format_date_for_display(filters.date_from)} "
+            f"al {format_date_for_display(filters.date_to)}"
+        )
+        body = (
+            "<h1>Reporte de movimientos</h1>"
+            f'<div class="filters">{html_lib.escape(period)} &middot; {count} movimiento(s) &middot; '
+            f"Cargo total: {html_lib.escape(format_currency(total_charge))} &middot; "
+            f"Abono total: {html_lib.escape(format_currency(total_payment))}</div>"
+            f'<div class="filters">Impreso el {printed_at}</div>'
+            f"<table><thead><tr>{header_html}</tr></thead><tbody>{''.join(rows_html)}</tbody></table>"
+        )
+
+        document = QTextDocument()
+        document.setHtml(MOVEMENTS_PRINT_STYLE + body)
+        show_print_preview(self, document, "Reporte de movimientos")
 
     def _on_row_double_clicked(self, row: int, _column: int) -> None:
         if row >= len(self._row_movement_ids):

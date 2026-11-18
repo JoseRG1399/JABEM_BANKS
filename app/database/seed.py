@@ -123,6 +123,14 @@ CLASSIFICATION_RULES = [
         "priority": 10,
     },
     {
+        "name": "Stripe",
+        "category_code": CategoryCode.STRIPE.value,
+        "bank_account_alias": "MIFEL2",
+        "pattern": "STRIPE",
+        "match_type": MatchType.CONTAINS.value,
+        "priority": 10,
+    },
+    {
         "name": "IVA comisión",
         "category_code": CategoryCode.COMMISSION_VAT.value,
         "bank_account_alias": "BBVA",
@@ -138,6 +146,48 @@ CLASSIFICATION_RULES = [
         "pattern": "COMISION",
         "match_type": MatchType.CONTAINS.value,
         "priority": 30,
+    },
+    {
+        "name": "IVA tasa de descuento y comisiones de venta",
+        "category_code": CategoryCode.COMMISSION_VAT.value,
+        "bank_account_alias": "BBVA",
+        "pattern": r"^IVA\s+(?:TASA\s+DE\s+DESC|COM\s)",
+        "match_type": MatchType.REGEX.value,
+        "priority": 15,
+    },
+    {
+        "name": "Comisión tasa de descuento y ventas",
+        "category_code": CategoryCode.COMMISSION.value,
+        "bank_account_alias": "BBVA",
+        "pattern": r"^(?:APLI\s+TASA\s+DE\s+DES|COM\s+VTAS?\s)",
+        "match_type": MatchType.REGEX.value,
+        "priority": 30,
+    },
+    {
+        "name": "Comisión tasa de descuento Mifel",
+        "category_code": CategoryCode.COMMISSION.value,
+        "bank_account_alias": "MIFEL",
+        "pattern": "TASA DE DESCUENTO",
+        "match_type": MatchType.CONTAINS.value,
+        "priority": 30,
+    },
+    {
+        "name": "IVA bonificación",
+        "category_code": CategoryCode.BONIFICATION_VAT.value,
+        "bank_account_alias": "BBVA",
+        "pattern": r"^IVA\s+BONIFICACION\b",
+        "match_type": MatchType.REGEX.value,
+        # Antes que "Bonificación"; después de "Comisión" (30) para que una
+        # bonificación de comisión siga restando en el reporte de comisiones.
+        "priority": 35,
+    },
+    {
+        "name": "Bonificación",
+        "category_code": CategoryCode.BONIFICATION.value,
+        "bank_account_alias": "BBVA",
+        "pattern": "BONIFICACION",
+        "match_type": MatchType.CONTAINS.value,
+        "priority": 40,
     },
     {
         "name": "Traspaso",

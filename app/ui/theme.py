@@ -129,6 +129,42 @@ def build_stylesheet(theme_name: str = "light") -> str:
         background-color: {p.border};
         color: {p.text_secondary};
     }}
+    QPushButton#dangerButton {{
+        background-color: {p.error};
+        color: #FFFFFF;
+        border: none;
+        font-weight: 600;
+    }}
+    QPushButton#dangerButton:hover {{
+        background-color: {p.error};
+        border: 2px solid {p.text_primary};
+    }}
+    QPushButton#successButton {{
+        background-color: {p.success};
+        color: #FFFFFF;
+        border: none;
+        font-weight: 600;
+    }}
+    QPushButton#successButton:hover {{
+        background-color: {p.success};
+        border: 2px solid {p.text_primary};
+    }}
+    QPushButton#infoButton {{
+        background-color: {p.secondary};
+        color: #FFFFFF;
+        border: none;
+        font-weight: 600;
+    }}
+    QPushButton#infoButton:hover {{
+        background-color: {p.secondary};
+        border: 2px solid {p.text_primary};
+    }}
+    QPushButton#dangerButton:disabled,
+    QPushButton#successButton:disabled,
+    QPushButton#infoButton:disabled {{
+        background-color: {p.border};
+        color: {p.text_secondary};
+    }}
     QFrame#card {{
         background-color: {p.surface};
         border: 1px solid {p.border};

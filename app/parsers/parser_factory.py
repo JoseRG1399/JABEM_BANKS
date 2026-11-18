@@ -13,6 +13,7 @@ from app.parsers.base_parser import BaseParser
 from app.parsers.bbva_txt_parser import BbvaTxtParser
 from app.parsers.bbva_xlsx_parser import BbvaXlsxParser
 from app.parsers.mifel_csv_parser import MifelCsvParser
+from app.parsers.mifel_xlsx_parser import MifelXlsxParser
 
 _PARSERS_BY_BANK_CODE: dict[str, type[BaseParser]] = {
     "BBVA": BbvaTxtParser,
@@ -26,6 +27,7 @@ _PARSERS_BY_BANK_CODE: dict[str, type[BaseParser]] = {
 # ``_PARSERS_BY_BANK_CODE``.
 _PARSERS_BY_BANK_AND_FILE_TYPE: dict[tuple[str, FileType], type[BaseParser]] = {
     ("BBVA", FileType.XLSX): BbvaXlsxParser,
+    ("MIFEL", FileType.XLSX): MifelXlsxParser,
 }
 
 _EXTENSION_TO_FILE_TYPE: dict[str, FileType] = {

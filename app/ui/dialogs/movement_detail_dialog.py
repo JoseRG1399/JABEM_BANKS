@@ -65,6 +65,13 @@ class MovementDetailDialog(QDialog):
             ("Archivo de origen", file_name),
             ("Fila de origen", str(movement.source_row_number)),
         ]
+        if movement.split_from_movement is not None:
+            fields.append(
+                (
+                    "Generado por división de IVA",
+                    f"Sí — a partir de: {movement.split_from_movement.description_original}",
+                )
+            )
         for label_text, value in fields:
             value_label = QLabel(str(value))
             value_label.setWordWrap(True)

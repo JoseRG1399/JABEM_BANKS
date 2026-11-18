@@ -19,6 +19,7 @@ NAV_ITEMS = [
     ("branches", "Sucursales"),
     ("rules", "Reglas"),
     ("reports", "Reportes"),
+    ("stores", "Tiendas"),
     ("settings", "Configuración"),
 ]
 

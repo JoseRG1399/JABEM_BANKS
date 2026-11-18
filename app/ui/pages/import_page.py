@@ -244,11 +244,21 @@ class ImportPage(QWidget):
             return
 
         object_name = "statusSuccess" if not outcome.errors else "statusWarning"
-        self._validation_label.setText(
+        message = (
             f"Filas leídas: {outcome.total_rows_seen}  |  "
             f"Filas válidas: {len(outcome.rows)}  |  "
             f"Filas inválidas: {len(outcome.errors)}"
         )
+        if outcome.errors:
+            # Sin esto, un encabezado no reconocido se veía como "0 filas
+            # válidas" sin ninguna pista de qué corregir en el archivo.
+            details = "\n".join(
+                f"Fila {error.row_number}: {error.reason}" for error in outcome.errors[:5]
+            )
+            message += f"\n{details}"
+            if len(outcome.errors) > 5:
+                message += f"\n… y {len(outcome.errors) - 5} error(es) más."
+        self._validation_label.setText(message)
         self._validation_label.setObjectName(object_name)
         self._validation_label.style().unpolish(self._validation_label)
         self._validation_label.style().polish(self._validation_label)
