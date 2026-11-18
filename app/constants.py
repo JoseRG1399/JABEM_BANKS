@@ -51,7 +51,8 @@ class CategoryCode(str, enum.Enum):
     BRANCH = "BRANCH"
     UBER = "UBER"
     CLIP = "CLIP"
-    COMMISSION = "COMMISSION"
+    STRIPE = "STRIPE"
+    COMMISSION ="COMMISSION"
     COMMISSION_VAT = "COMMISSION_VAT"
     TRANSFER = "TRANSFER"
     ERRONEOUS_TRANSFER = "ERRONEOUS_TRANSFER"
@@ -67,6 +68,7 @@ CATEGORY_DISPLAY_NAMES: dict[str, str] = {
     CategoryCode.BRANCH: "Sucursal",
     CategoryCode.UBER: "Uber",
     CategoryCode.CLIP: "Clip",
+    CategoryCode.STRIPE: "Stripe",
     CategoryCode.COMMISSION: "Comisiones",
     CategoryCode.COMMISSION_VAT: "IVA comisiones",
     CategoryCode.TRANSFER: "Traspaso",

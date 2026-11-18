@@ -418,3 +418,33 @@ def test_day_account_report_value_type_charge(db_session, scenario):
     report = report_service.day_account_report(db_session, ReportFilter(), ReportValueType.CHARGE)
     assert report.totals_by_account["BBVA"] == 17400
     assert report.totals_by_account["MIFEL"] == 5000
+
+
+def test_consolidated_report_includes_stripe_deposits_without_branch(db_session, scenario):
+    mifel2 = db_session.query(BankAccount).filter_by(alias="MIFEL2").one()
+    imported_file = db_session.query(ImportedFile).one()
+    stripe = db_session.query(MovementCategory).filter_by(code="STRIPE").one()
+
+    db_session.add(
+        Movement(
+            bank_account_id=mifel2.id,
+            branch_id=None,
+            category_id=stripe.id,
+            imported_file_id=imported_file.id,
+            movement_date=dt.date(2026, 7, 1),
+            description_original="Stripe",
+            normalized_text="STRIPE",
+            payment_cents=9234,
+            movement_hash="h-stripe",
+            occurrence_number=1,
+            classification_status="CLASSIFIED",
+            classification_method="SPECIAL_RULE",
+            source_row_number=1,
+        )
+    )
+    db_session.flush()
+
+    report = report_service.consolidated_by_date_branch_account(db_session, ReportFilter())
+    day1 = next(g for g in report.day_groups if g.day == dt.date(2026, 7, 1))
+    assert day1.values_by_account["MIFEL2"] == 9234
+    assert any(row.branch_label == "Stripe" for row in day1.branch_rows)

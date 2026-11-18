@@ -123,6 +123,14 @@ CLASSIFICATION_RULES = [
         "priority": 10,
     },
     {
+        "name": "Stripe",
+        "category_code": CategoryCode.STRIPE.value,
+        "bank_account_alias": "MIFEL2",
+        "pattern": "STRIPE",
+        "match_type": MatchType.CONTAINS.value,
+        "priority": 10,
+    },
+    {
         "name": "IVA comisión",
         "category_code": CategoryCode.COMMISSION_VAT.value,
         "bank_account_alias": "BBVA",

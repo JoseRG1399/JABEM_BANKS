@@ -349,7 +349,11 @@ class ConsolidatedReport:
 
 # Categorías de ingreso que no pertenecen a una sucursal pero sí deben verse en
 # la conciliación de depósitos (cuenta MIFEL2).
-DEPOSIT_SOURCE_CATEGORIES = [CategoryCode.UBER.value, CategoryCode.CLIP.value]
+DEPOSIT_SOURCE_CATEGORIES = [
+    CategoryCode.UBER.value,
+    CategoryCode.CLIP.value,
+    CategoryCode.STRIPE.value,
+]
 
 
 def _value_column(value_type: ReportValueType):

@@ -12,5 +12,6 @@
   "login_password_hash": "d33dd3827baadb4d19133e5c90ed6008296379fc5c34621663dcdf084fc9a3df",
   "login_password_salt": "5f2214afc7c2ab28bb250f9f29ddef2f",
   "login_failed_attempts": 0,
-  "login_lockout_until": ""
+  "login_lockout_until": "",
+  "store_api_host": "https://almacen-backend-rs-c1ccfba8c8f7.herokuapp.com/almacen/api"
 }

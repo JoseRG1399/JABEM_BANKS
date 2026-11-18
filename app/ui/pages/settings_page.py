@@ -119,6 +119,12 @@ class SettingsPage(QWidget):
         self._theme_combo.setCurrentIndex(theme_index if theme_index >= 0 else 0)
         form.addRow("Tema:", self._theme_combo)
 
+        self._store_api_host_edit = QLineEdit(self._config.settings.store_api_host)
+        self._store_api_host_edit.setPlaceholderText(
+            "https://… (si se deja vacío se usa NEXT_PUBLIC_API_HOST)"
+        )
+        form.addRow("API de tiendas:", self._store_api_host_edit)
+
         save_button = QPushButton("Guardar configuración")
         save_button.setObjectName("primaryButton")
         save_button.clicked.connect(self._on_save_general)
@@ -153,6 +159,7 @@ class SettingsPage(QWidget):
         settings.backup_frequency_days = self._backup_frequency_spin.value()
         settings.currency = self._currency_edit.text().strip() or settings.currency
         settings.theme = self._theme_combo.currentData()
+        settings.store_api_host = self._store_api_host_edit.text().strip()
 
         self._config.save_settings()
         set_display_format(settings.date_format)

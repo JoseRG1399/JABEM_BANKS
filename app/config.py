@@ -89,6 +89,7 @@ class AppSettings:
     login_password_salt: str = ""
     login_failed_attempts: int = 0
     login_lockout_until: str = ""
+    store_api_host: str = ""
 
     @classmethod
     def load(cls, settings_file: Path) -> "AppSettings":
