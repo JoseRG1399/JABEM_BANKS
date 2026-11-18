@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 APP_NAME_DEFAULT = "Analizador Bancario"
-APP_VERSION = "3.17"
+APP_VERSION = "3.18"
 COMPANY_FOLDER_NAME = "AnalizadorBancario"
 
 
