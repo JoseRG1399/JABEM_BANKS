@@ -213,6 +213,14 @@ def test_totals_by_branch_filters_by_selected_branch_ids(db_session, scenario):
     assert totals == {"01. ALFREDO": 120000, "02. COLON": 50000}
 
 
+def test_totals_by_category_filters_by_selected_category_ids(db_session, scenario):
+    all_rows = report_service.totals_by_category(db_session, ReportFilter())
+    ids = {row.label: row.key_id for row in all_rows}
+    filters = ReportFilter(category_ids=[ids["Sucursal"], ids["Comisiones"]])
+    rows = report_service.totals_by_category(db_session, filters)
+    assert {row.label for row in rows} == {"Sucursal", "Comisiones"}
+
+
 def test_totals_by_category(db_session, scenario):
     rows = report_service.totals_by_category(db_session, ReportFilter())
     by_label = {row.label: row for row in rows}

@@ -189,8 +189,9 @@ class ReportsPage(QWidget):
         filters_row.addWidget(self._branch_filter)
 
         filters_row.addWidget(QLabel("Categoría:"))
-        self._category_combo = QComboBox()
-        filters_row.addWidget(self._category_combo)
+        self._category_filter = MultiSelectComboBox(placeholder="Todas")
+        self._category_filter.setMinimumWidth(160)
+        filters_row.addWidget(self._category_filter)
         outer.addLayout(filters_row)
 
         actions_row = QHBoxLayout()
@@ -270,9 +271,7 @@ class ReportsPage(QWidget):
             self._branch_filter.set_items(
                 [(f"{b.branch_number}. {b.name}", b.id) for b in branch_repo.list_all()]
             )
-            self._fill_combo(
-                self._category_combo, [(c.name, c.id) for c in category_repo.list_all()]
-            )
+            self._category_filter.set_items([(c.name, c.id) for c in category_repo.list_all()])
 
     def _fill_combo(self, combo: QComboBox, items: list[tuple[str, int]]) -> None:
         current = combo.currentData()
@@ -313,7 +312,7 @@ class ReportsPage(QWidget):
             bank_id=self._bank_combo.currentData(),
             bank_account_id=self._account_combo.currentData(),
             branch_ids=self._branch_filter.checked_values() or None,
-            category_id=self._category_combo.currentData(),
+            category_ids=self._category_filter.checked_values() or None,
         )
 
     # ------------------------------------------------------------------
@@ -827,9 +826,10 @@ class ReportsPage(QWidget):
             branch_labels = self._branch_filter.checked_labels()
             if branch_labels:
                 parts.append(f"Sucursales: {', '.join(branch_labels)}")
-        category_label = self._combo_label_for_value(self._category_combo, filters.category_id)
-        if category_label:
-            parts.append(f"Categoría: {category_label}")
+        if filters.category_ids:
+            category_labels = self._category_filter.checked_labels()
+            if category_labels:
+                parts.append(f"Categorías: {', '.join(category_labels)}")
         return " &middot; ".join(html_lib.escape(part) for part in parts)
 
     @staticmethod

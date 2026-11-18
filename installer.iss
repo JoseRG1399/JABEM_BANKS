@@ -1,5 +1,5 @@
 #define MyAppName "Analizador Bancario"
-#define MyAppVersion "3.16"
+#define MyAppVersion "3.17"
 #define MyAppPublisher "Jabem"
 #define MyAppExeName "AnalizadorBancario.exe"
 

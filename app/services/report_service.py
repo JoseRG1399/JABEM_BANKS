@@ -54,6 +54,8 @@ def _apply_common_filters(query: Query, filters: ReportFilter, joined_account: b
         query = query.filter(Movement.branch_id.in_(filters.branch_ids))
     if filters.category_id:
         query = query.filter(Movement.category_id == filters.category_id)
+    if filters.category_ids:
+        query = query.filter(Movement.category_id.in_(filters.category_ids))
     return query
 
 
